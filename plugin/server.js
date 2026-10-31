@@ -779,7 +779,7 @@ async function claimPost(discord, resolved, note) {
     throw new RefusedError(`"${thread.name}" is tagged Claimed but has no claim marker (a human probably set it). Ask in the post before taking it.`);
   }
   const marker = await discord.send(thread.id, {
-    content: claimMarkerText(config.agentName, note),
+    content: claimMarkerText(`<@${me.id}>`, note),
     allowed_mentions: { parse: [] }
   });
   await sleep(1500);
@@ -1109,7 +1109,7 @@ ${topic}`, "forum name or topic");
       if (claim.holder && claim.holder.authorId !== me.id) {
         throw new RefusedError(`"${thread.name}" is claimed by ${claim.holder.authorName}; only they (or a human) can change its status.`);
       }
-      await discord.send(thread.id, { content: releaseMarkerText(discord.config.agentName, status, note), allowed_mentions: { parse: [] } });
+      await discord.send(thread.id, { content: releaseMarkerText(`<@${me.id}>`, status, note), allowed_mentions: { parse: [] } });
       await setTag(discord, thread, forum, status);
       updateBotState(me.id, (s) => void (s.claimedPosts = s.claimedPosts.filter((id) => id !== thread.id)));
       return `"${thread.name}" is now ${status}.`;
