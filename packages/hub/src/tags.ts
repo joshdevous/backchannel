@@ -1,5 +1,6 @@
 import { FORUM_EMOJI, STATUS_TAGS, baseName, prefixedName } from '@backchannel/core';
 import { ChannelType, type Client, type ForumChannel, type Guild, type ThreadChannel } from 'discord.js';
+import { forumCategoryName } from './config.ts';
 import { log, logError } from './log.ts';
 
 const STATUS_NAMES: readonly string[] = STATUS_TAGS.map((t) => t.name);
@@ -50,6 +51,18 @@ export async function ensureForumPrefix(forum: ForumChannel): Promise<void> {
   log(`forum renamed id=${forum.id} name=${baseName(wanted)}`);
 }
 
+/** A forum made outside any category (an agent on a fresh server) is moved into the forum category. */
+export async function ensureForumCategory(forum: ForumChannel): Promise<void> {
+  if (forum.parentId) return;
+  const name = forumCategoryName().toLowerCase();
+  const category = forum.guild.channels.cache.find(
+    (c) => c.type === ChannelType.GuildCategory && baseName(c.name).toLowerCase() === name,
+  );
+  if (!category) return;
+  await forum.setParent(category.id, { lockPermissions: false, reason: 'Backchannel forum layout' });
+  log(`forum moved id=${forum.id} category=${category.name}`);
+}
+
 /** Gives a new post the Open tag when it has no status tag; leaves multi-status posts alone. */
 export async function tagNewPost(thread: ThreadChannel): Promise<void> {
   const forum = thread.parent;
@@ -84,6 +97,7 @@ export function startTagWatchers(client: Client<true>): void {
     if (channel.type !== ChannelType.GuildForum) return;
     try {
       await ensureForumPrefix(channel);
+      await ensureForumCategory(channel);
       await ensureStatusTags(channel);
     } catch (err) {
       logError(`forum setup forum=${channel.id}`, err);

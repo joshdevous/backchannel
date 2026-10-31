@@ -319,7 +319,7 @@ export const TOOLS: ToolDefinition[] = [
         parent_id: category?.id,
         available_tags: STATUS_TAGS.map((t) => ({ name: t.name, emoji_name: t.emoji })),
       });
-      return `Created forum "${name}" (id ${forum.id})${category ? '' : ' – note: no Projects category found, so it sits at the top level'}.`;
+      return `Created forum "${name}" (id ${forum.id})${category ? '' : '. The Backchannel hub moves it into the forum category'}.`;
     },
   },
   {

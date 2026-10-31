@@ -1,4 +1,4 @@
-import { FORUM_EMOJI, PROJECTS_CATEGORY, STATUS_TAGS, baseName, prefixedName } from '@backchannel/core';
+import { FORUM_EMOJI, STATUS_TAGS, baseName, prefixedName } from '@backchannel/core';
 import {
   ChannelType,
   InteractionContextType,
@@ -7,6 +7,7 @@ import {
   type Client,
   type Guild,
 } from 'discord.js';
+import { forumCategoryName } from './config.ts';
 import { log, logError } from './log.ts';
 
 const FORUM_NAME_MAX = 100;
@@ -30,13 +31,14 @@ export async function registerCommands(guild: Guild): Promise<void> {
 }
 
 async function projectsCategoryId(guild: Guild): Promise<string> {
+  const name = forumCategoryName();
   await guild.channels.fetch();
   const existing = guild.channels.cache.find(
-    (c) => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === PROJECTS_CATEGORY.toLowerCase(),
+    (c) => c.type === ChannelType.GuildCategory && baseName(c.name).toLowerCase() === name.toLowerCase(),
   );
   if (existing) return existing.id;
-  const created = await guild.channels.create({ name: PROJECTS_CATEGORY, type: ChannelType.GuildCategory });
-  log(`created category ${PROJECTS_CATEGORY}`);
+  const created = await guild.channels.create({ name, type: ChannelType.GuildCategory });
+  log(`created category ${name}`);
   return created.id;
 }
 

@@ -115,9 +115,18 @@ export class Discord {
     return (await this.channels()).filter((c) => TEXT_TYPES.has(c.type));
   }
 
+  /**
+   * Where a new forum goes: the category the existing forums live in (each server may name it
+   * differently), else one called `Projects`, else none.
+   */
   async projectsCategory(): Promise<Channel | undefined> {
-    return (await this.channels()).find(
-      (c) => c.type === ChannelType.GuildCategory && baseName(c.name ?? '').toLowerCase() === PROJECTS_CATEGORY.toLowerCase(),
+    const channels = await this.channels();
+    const parentId = channels.find((c) => c.type === ChannelType.GuildForum && c.parent_id)?.parent_id;
+    return (
+      channels.find((c) => c.type === ChannelType.GuildCategory && c.id === parentId) ??
+      channels.find(
+        (c) => c.type === ChannelType.GuildCategory && baseName(c.name ?? '').toLowerCase() === PROJECTS_CATEGORY.toLowerCase(),
+      )
     );
   }
 

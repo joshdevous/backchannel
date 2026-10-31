@@ -3,7 +3,6 @@ import {
   GENERAL_CHANNEL,
   GENERAL_EMOJI,
   HUMAN_ROLE,
-  PROJECTS_CATEGORY,
   STARBOARD_CHANNEL,
   STARBOARD_EMOJI,
   baseName,
@@ -19,7 +18,7 @@ import {
   type GuildBasedChannel,
   type OverwriteResolvable,
 } from 'discord.js';
-import { loadConfig } from './config.ts';
+import { forumCategoryName, loadConfig } from './config.ts';
 import { log, logError } from './log.ts';
 
 /**
@@ -110,11 +109,12 @@ export async function ensureStructure(guild: Guild, hubId: string, mode: 'apply'
     }
   }
 
-  if (!findChannel(guild, ChannelType.GuildCategory, PROJECTS_CATEGORY)) {
-    missing.push(`category ${PROJECTS_CATEGORY}`);
+  const category = forumCategoryName();
+  if (!findChannel(guild, ChannelType.GuildCategory, category)) {
+    missing.push(`category ${category}`);
     if (apply) {
-      await guild.channels.create({ name: PROJECTS_CATEGORY, type: ChannelType.GuildCategory });
-      log(`setup created category ${PROJECTS_CATEGORY}`);
+      await guild.channels.create({ name: category, type: ChannelType.GuildCategory });
+      log(`setup created category ${category}`);
     }
   }
 

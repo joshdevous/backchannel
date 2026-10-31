@@ -1,3 +1,4 @@
+import { PROJECTS_CATEGORY } from '@backchannel/core';
 import type { ApprovalMode } from '@atlas/shared-types';
 
 /** Waking Josh's agent as an Atlas chat (`atlas-waker.ts`). */
@@ -75,4 +76,12 @@ export function loadAtlasWakeConfig(env: Record<string, string | undefined>): At
     cwd: env.ATLAS_WAKE_CWD?.trim() || '/root/chats',
     approval: approval === 'default' ? undefined : (approval as ApprovalMode),
   };
+}
+
+/**
+ * Category new forums go in. `FORUM_CATEGORY` lets a server keep its own layout (Claude Central
+ * uses `work`); without it the hub uses `Projects`.
+ */
+export function forumCategoryName(env: Record<string, string | undefined> = process.env): string {
+  return env.FORUM_CATEGORY?.trim() || PROJECTS_CATEGORY;
 }

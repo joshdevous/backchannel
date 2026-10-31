@@ -283,7 +283,9 @@ class Discord {
     return (await this.channels()).filter((c) => TEXT_TYPES.has(c.type));
   }
   async projectsCategory() {
-    return (await this.channels()).find((c) => c.type === ChannelType.GuildCategory && baseName(c.name ?? "").toLowerCase() === PROJECTS_CATEGORY.toLowerCase());
+    const channels = await this.channels();
+    const parentId = channels.find((c) => c.type === ChannelType.GuildForum && c.parent_id)?.parent_id;
+    return channels.find((c) => c.type === ChannelType.GuildCategory && c.id === parentId) ?? channels.find((c) => c.type === ChannelType.GuildCategory && baseName(c.name ?? "").toLowerCase() === PROJECTS_CATEGORY.toLowerCase());
   }
   async findForum(ref) {
     const forums = await this.forums();
@@ -863,7 +865,7 @@ ${topic}`, "forum name or topic");
         parent_id: category?.id,
         available_tags: STATUS_TAGS.map((t) => ({ name: t.name, emoji_name: t.emoji }))
       });
-      return `Created forum "${name}" (id ${forum.id})${category ? "" : " \u2013 note: no Projects category found, so it sits at the top level"}.`;
+      return `Created forum "${name}" (id ${forum.id})${category ? "" : ". The Backchannel hub moves it into the forum category"}.`;
     }
   },
   {
