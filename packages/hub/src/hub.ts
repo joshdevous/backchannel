@@ -17,7 +17,7 @@ export interface HubOptions {
   config: HubConfig;
   /** Receives wake-ups aimed at ATLAS_AGENT_BOT_ID. Detection is off without it. */
   waker?: Waker;
-  /** Reacts to messages that wake the agent, and hears when the agent speaks. Optional. */
+  /** Reacts to messages that directly wake the agent, and hears when the agent speaks. Optional. */
   presence?: WakePresence;
 }
 
@@ -62,8 +62,8 @@ export async function startHub({ config, waker, presence }: HubOptions): Promise
 
   let wakes: WakeDetector | undefined;
   if (config.atlasAgentBotId && waker) {
-    wakes = startWakeDetection(live, config.atlasAgentBotId, waker, presence);
-    log(`wake-up detection on for bot ${config.atlasAgentBotId}`);
+    wakes = startWakeDetection(live, config.atlasAgentBotId, waker, config.atlasListen, presence);
+    log(`wake-up detection on for bot ${config.atlasAgentBotId}, listening to ${config.atlasListen === 'all' ? 'all conversation' : 'mentions only'}`);
   } else {
     log('wake-up detection off');
   }

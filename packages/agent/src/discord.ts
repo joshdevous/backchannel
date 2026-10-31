@@ -221,6 +221,10 @@ export class Discord {
     return (await this.rest.get(Routes.channelMessages(channelId), { query })) as APIMessage[];
   }
 
+  async message(channelId: string, messageId: string): Promise<APIMessage> {
+    return (await this.rest.get(Routes.channelMessage(channelId, messageId))) as APIMessage;
+  }
+
   async send(channelId: string, body: Record<string, unknown>, files: RawFile[] = []): Promise<APIMessage> {
     return (await this.rest.post(Routes.channelMessages(channelId), { body, files: files.length ? files : undefined })) as APIMessage;
   }
@@ -247,6 +251,11 @@ export class Discord {
 
   async react(channelId: string, messageId: string, emoji: string): Promise<void> {
     await this.rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encodeURIComponent(emoji)));
+  }
+
+  /** Removes this bot's own `emoji` reaction. */
+  async unreact(channelId: string, messageId: string, emoji: string): Promise<void> {
+    await this.rest.delete(Routes.channelMessageOwnReaction(channelId, messageId, encodeURIComponent(emoji)));
   }
 
   /** Shows "<bot> is typing…" in the channel for about 10 s. */

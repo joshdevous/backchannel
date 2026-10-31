@@ -1,21 +1,29 @@
-import { AGENT_ROLE, isClaimMarker, isReleaseMarker, resolveClaim } from '@backchannel/core';
+import {
+  AGENT_ROLE,
+  baseName,
+  decideWakeReason,
+  isAmbient,
+  isClaimMarker,
+  isDirect,
+  isReleaseMarker,
+  MESSAGE_TYPE_REPLY,
+  resolveClaim,
+  shortText,
+  strongestReason,
+  systemText,
+  type AmbientInput,
+  type DirectReason,
+  type ListenMode,
+} from '@backchannel/core';
 import { ChannelType, type Client, type Message, type ThreadChannel } from 'discord.js';
 import { log, logError } from './log.ts';
-import type { AuthorKind, WakeEvent, WakeMessage, WakeReason, Waker } from './waker.ts';
+import type { AuthorKind, ChannelMessage, ReplyContext, WakeEvent, WakeMessage, WakeReason, Waker } from './waker.ts';
 import type { WakePresence } from './presence.ts';
 
 /** A batch is sent this long after the last message in its channel... */
 export const WAKE_QUIET_MS = 1_500;
 /** ...but never later than this after the first, so a chatty post cannot postpone it forever. */
 export const WAKE_MAX_MS = 5_000;
-
-/** Higher wins when several messages in one batch have different reasons. */
-const REASON_STRENGTH: Record<WakeReason, number> = {
-  mention: 4,
-  reply: 3,
-  'claimed-post': 2,
-  'own-post': 1,
-};
 
 export interface WakeInput {
   authorId: string;
@@ -24,6 +32,8 @@ export interface WakeInput {
   repliedToAuthorId?: string | null;
   /** Only set for messages inside a forum post. */
   post?: { starterAuthorId: string | null; claimantId: string | null };
+  /** What listen mode `all` needs to know (`isAmbient` in core). */
+  ambient: AmbientInput;
 }
 
 /** True when the claimant is worth a (possibly expensive) lookup. */
@@ -36,15 +46,24 @@ export function needsClaimantLookup(input: WakeInput, targetId: string): boolean
   );
 }
 
-/** Decides whether a message is aimed at `targetId`. Pure; ignores the target and the hub. */
-export function wakeReason(input: WakeInput, targetId: string, hubId: string): WakeReason | null {
-  if (input.authorId === targetId || input.authorId === hubId) return null;
+/** Whether a message is aimed at `targetId` (mention, reply, its post). */
+export function directReason(input: WakeInput, targetId: string): DirectReason | null {
   // A reply to the target usually also pings it, so check replies first.
   if (input.repliedToAuthorId === targetId) return 'reply';
   if (input.mentionedUserIds.includes(targetId)) return 'mention';
-  if (input.post?.claimantId === targetId) return 'claimed-post';
-  if (input.post?.starterAuthorId === targetId) return 'own-post';
+  if (input.post?.claimantId === targetId) return 'claimed_post';
+  if (input.post?.starterAuthorId === targetId) return 'started_post';
   return null;
+}
+
+/**
+ * Whether and why a message wakes `targetId` under listen mode `listen`. Pure; ignores the
+ * target's and the hub's own messages. Direct triggers wake in both modes (bots included);
+ * in mode `all` ordinary human conversation wakes too, as `ambient`.
+ */
+export function wakeReason(input: WakeInput, targetId: string, hubId: string, listen: ListenMode): WakeReason | null {
+  if (input.authorId === targetId || input.authorId === hubId) return null;
+  return decideWakeReason(directReason(input, targetId), isAmbient(input.ambient), listen);
 }
 
 export function isMarker(content: string): boolean {
@@ -59,8 +78,7 @@ export function mergeWakeMessages(
 ): WakeEvent {
   const newest = messages[messages.length - 1];
   if (!newest) throw new Error('mergeWakeMessages needs at least one message');
-  let reason = newest.reason;
-  for (const m of messages) if (REASON_STRENGTH[m.reason] > REASON_STRENGTH[reason]) reason = m.reason;
+  const reason = strongestReason(messages.map((m) => m.reason));
   return { ...newest, reason, channelId, ...meta, messages: [...messages] };
 }
 
@@ -153,6 +171,58 @@ function authorKind(message: Message, agentRoleId: string | undefined): AuthorKi
   return 'human';
 }
 
+function agentRoleIdOf(message: Message<true>): string | undefined {
+  return message.guild.roles.cache.find((r) => r.name === AGENT_ROLE)?.id;
+}
+
+function nameOf(message: Message): string {
+  return message.member?.displayName ?? message.author.displayName;
+}
+
+/** What the agent is shown as a message's text: the content, or a line for a system notice. */
+function shownContent(message: Message): string {
+  return systemText(message.type, nameOf(message), message.content) ?? message.content;
+}
+
+/** The message a reply points at; fetched when the gateway did not embed it. Undefined for non-replies. */
+async function replyContext(message: Message<true>, targetId: string, agentRoleId: string | undefined): Promise<ReplyContext | undefined> {
+  const id = message.reference?.messageId;
+  if (message.type !== MESSAGE_TYPE_REPLY || !id) return undefined;
+  const ref = await message.fetchReference().catch(() => null);
+  if (!ref) return { messageId: id, authorName: 'someone', isSelf: false, text: '(message not available, maybe deleted)' };
+  return {
+    messageId: ref.id,
+    authorId: ref.author.id,
+    authorName: nameOf(ref),
+    authorKind: authorKind(ref, agentRoleId),
+    isSelf: ref.author.id === targetId,
+    text: shortText(shownContent(ref)),
+  };
+}
+
+/** Earlier messages kept short: the agent gets the gist, and `read` has the rest. */
+const EARLIER_TEXT_MAX = 300;
+/** How many messages before a first wake are quoted as context. */
+export const EARLIER_MESSAGES = 10;
+
+async function fetchEarlier(client: Client<true>, channelId: string, beforeId: string, targetId: string): Promise<ChannelMessage[]> {
+  const channel = await client.channels.fetch(channelId);
+  if (!channel?.isTextBased() || !('guild' in channel)) return [];
+  const fetched = await channel.messages.fetch({ before: beforeId, limit: EARLIER_MESSAGES });
+  const messages = [...fetched.values()].filter((m): m is Message<true> => m.inGuild()).reverse();
+  const agentRoleId = messages[0] ? agentRoleIdOf(messages[0]) : undefined;
+  return Promise.all(
+    messages.map(async (m) => ({
+      messageId: m.id,
+      authorId: m.author.id,
+      authorName: nameOf(m),
+      authorKind: authorKind(m, agentRoleId),
+      content: shortText(shownContent(m), EARLIER_TEXT_MAX),
+      replyTo: await replyContext(m, targetId, agentRoleId),
+    })),
+  );
+}
+
 export interface WakeDetector {
   /** Sends every still-pending batch now. Used at shutdown. */
   flush(): Promise<void>;
@@ -160,12 +230,13 @@ export interface WakeDetector {
 
 /**
  * Hooks MessageCreate/MessageDelete and forwards debounced wake events to `waker`. `presence`
- * (optional) reacts to each triggering message at once and hears when the agent speaks.
+ * (optional) reacts to each directly triggering message at once and hears when the agent speaks.
  */
 export function startWakeDetection(
   client: Client<true>,
   targetId: string,
   waker: Waker,
+  listen: ListenMode,
   presence?: WakePresence,
 ): WakeDetector {
   const claimants = new ClaimantCache();
@@ -173,7 +244,10 @@ export function startWakeDetection(
   const hubId = client.user.id;
 
   const debouncer = new Debouncer<WakeMessage>(WAKE_QUIET_MS, WAKE_MAX_MS, async (channelId, messages) => {
-    const event = mergeWakeMessages(channelId, meta.get(channelId) ?? {}, messages);
+    const event: WakeEvent = {
+      ...mergeWakeMessages(channelId, meta.get(channelId) ?? {}, messages),
+      earlier: () => fetchEarlier(client, channelId, messages[0]!.messageId, targetId),
+    };
     meta.delete(channelId);
     try {
       await waker.wake(event);
@@ -198,37 +272,41 @@ export function startWakeDetection(
       const thread = channel.isThread() && channel.parent?.type === ChannelType.GuildForum ? channel : null;
       if (thread && isMarker(message.content)) claimants.invalidate(thread.id);
 
-      let repliedToAuthorId: string | null = message.mentions.repliedUser?.id ?? null;
-      if (!repliedToAuthorId && message.reference?.messageId) {
-        // The gateway only embeds the referenced message sometimes.
-        repliedToAuthorId = (await message.fetchReference().catch(() => null))?.author.id ?? null;
-      }
-
+      const agentRoleId = agentRoleIdOf(message);
+      const kind = authorKind(message, agentRoleId);
+      const replyTo = await replyContext(message, targetId, agentRoleId);
       const input: WakeInput = {
         authorId: message.author.id,
         mentionedUserIds: [...message.mentions.users.keys()],
-        repliedToAuthorId,
+        repliedToAuthorId: replyTo?.authorId ?? message.mentions.repliedUser?.id ?? null,
         post: thread ? { starterAuthorId: thread.ownerId, claimantId: null } : undefined,
+        ambient: {
+          fromBot: kind === 'agent',
+          type: message.type,
+          where: thread ? 'forum_post' : channel.type === ChannelType.GuildText ? 'text' : 'other',
+          channelName: baseName(channel.name),
+        },
       };
       if (thread && input.post && needsClaimantLookup(input, targetId)) {
         input.post.claimantId = await claimants.get(thread);
       }
 
-      const reason = wakeReason(input, targetId, hubId);
+      const reason = wakeReason(input, targetId, hubId, listen);
       if (!reason) return;
 
-      const agentRoleId = message.guild.roles.cache.find((r) => r.name === AGENT_ROLE)?.id;
       const entry: WakeMessage = {
         reason,
         messageId: message.id,
         authorId: message.author.id,
-        authorName: message.member?.displayName ?? message.author.displayName,
-        authorKind: authorKind(message, agentRoleId),
-        content: message.content,
+        authorName: nameOf(message),
+        authorKind: kind,
+        content: shownContent(message),
         jumpUrl: message.url,
+        replyTo,
       };
       if (thread) meta.set(thread.id, { postTitle: thread.name, forumName: thread.parent?.name });
-      presence?.ack(message.channelId, message.id);
+      // 👀 only when someone actually asked; an overheard message may well get no answer.
+      if (isDirect(reason)) presence?.ack(message.channelId, message.id);
       debouncer.add(message.channelId, entry);
       log(`wake queued channel=${message.channelId} message=${message.id} reason=${reason}`);
     } catch (err) {

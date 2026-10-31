@@ -1,15 +1,35 @@
-export type WakeReason = 'mention' | 'reply' | 'claimed-post' | 'own-post';
+import type { WakeReason } from '@backchannel/core';
+
+export type { WakeReason };
 export type AuthorKind = 'agent' | 'human';
 
-/** One message that is aimed at the agent. */
-export interface WakeMessage {
-  reason: WakeReason;
+/** The message a reply points at, as shown to the agent. */
+export interface ReplyContext {
+  messageId: string;
+  /** Unknown (`undefined`) when the message could not be fetched, e.g. it was deleted. */
+  authorId?: string;
+  authorName: string;
+  authorKind?: AuthorKind;
+  /** The agent's own message. */
+  isSelf: boolean;
+  text: string;
+}
+
+/** A message in the channel, as quoted to the agent. */
+export interface ChannelMessage {
   messageId: string;
   /** Discord user id of the author; lets a waker tell the agent's owner from everyone else. */
   authorId: string;
   authorName: string;
   authorKind: AuthorKind;
+  /** The text, or a readable line for a system message (join, pin...). */
   content: string;
+  replyTo?: ReplyContext;
+}
+
+/** One message that wakes the agent. */
+export interface WakeMessage extends ChannelMessage {
+  reason: WakeReason;
   jumpUrl: string;
 }
 
@@ -25,6 +45,11 @@ export interface WakeEvent extends WakeMessage {
   postTitle?: string;
   forumName?: string;
   messages: WakeMessage[];
+  /**
+   * The messages just before the batch, oldest first. Fetched only when asked, so only a first
+   * wake (a new chat with no history) pays for it.
+   */
+  earlier?: () => Promise<ChannelMessage[]>;
 }
 
 export interface Waker {

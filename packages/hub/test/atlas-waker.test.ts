@@ -215,3 +215,31 @@ test('a dropped wake does not start typing', async () => {
   await waker.wake(wakeEvent('over'));
   expect(typing).toHaveLength(MAX_WAKES_PER_HOUR);
 });
+
+test('an ambient wake is delivered but shows no typing', async () => {
+  const { waker, typing, chats } = setup();
+  const event = wakeEvent('c1', 'chatter');
+  await waker.wake({ ...event, reason: 'ambient', messages: event.messages.map((m) => ({ ...m, reason: 'ambient' as const })) });
+  expect(typing).toHaveLength(0);
+  expect(chats.deliveries.some((d) => d.text.includes('Nobody asked you directly'))).toBe(true);
+});
+
+test('only the first wake of a channel fetches the earlier messages for its brief', async () => {
+  const { waker, chats } = setup();
+  let fetches = 0;
+  const earlier = async () => {
+    fetches++;
+    return [{ messageId: 'e1', authorId: 'owner', authorName: 'J', authorKind: 'human' as const, content: 'context line' }];
+  };
+  await waker.wake({ ...wakeEvent('c1', 'first'), earlier });
+  expect(chats.deliveries[0]!.text).toContain('(message e1): "context line"');
+  await waker.wake({ ...wakeEvent('c1', 'second'), earlier });
+  expect(fetches).toBe(1);
+  expect(chats.deliveries[1]!.text).not.toContain('context line');
+});
+
+test('a failing earlier fetch still sends the first brief', async () => {
+  const { waker, chats } = setup();
+  await waker.wake({ ...wakeEvent('c1', 'first'), earlier: async () => Promise.reject(new Error('nope')) });
+  expect(chats.deliveries[0]!.text).toContain('> first');
+});

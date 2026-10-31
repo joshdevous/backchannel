@@ -8,7 +8,24 @@ import { createInterface } from "readline/promises";
 import { parseArgs } from "util";
 import { REST } from "@discordjs/rest";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
+var OVERFLOW_FILENAME = "message.md";
+var OVERFLOW_NOTE = `
 
+\u2026 (full message attached as \`${OVERFLOW_FILENAME}\`)`;
+var LISTEN_MODES = ["all", "mentions"];
+var DEFAULT_LISTEN = "all";
+function parseListenMode(value, source) {
+  const trimmed = value?.trim().toLowerCase();
+  if (!trimmed)
+    return DEFAULT_LISTEN;
+  if (LISTEN_MODES.includes(trimmed))
+    return trimmed;
+  throw new Error(`${source} must be one of ${LISTEN_MODES.join(", ")} (got "${value}")`);
+}
+var MESSAGE_TYPE_DEFAULT = 0;
+var MESSAGE_TYPE_REPLY = 19;
+var SPOKEN_TYPES = new Set([MESSAGE_TYPE_DEFAULT, MESSAGE_TYPE_REPLY]);
+var APP_TYPES = new Set([20, 23]);
 import { homedir } from "os";
 import { join } from "path";
 function backchannelDir() {
@@ -26,6 +43,7 @@ var { values: flags } = parseArgs({
     guild: { type: "string" },
     owner: { type: "string" },
     name: { type: "string" },
+    listen: { type: "string" },
     config: { type: "string" },
     status: { type: "boolean" },
     "no-check": { type: "boolean" },
@@ -33,11 +51,13 @@ var { values: flags } = parseArgs({
   }
 });
 if (flags.help) {
-  console.log(`Usage: bun setup.ts [--token T] [--guild ID] [--owner ID] [--name NAME] [--config PATH] [--status] [--no-check]
+  console.log(`Usage: bun setup.ts [--token T] [--guild ID] [--owner ID] [--name NAME] [--listen all|mentions] [--config PATH] [--status] [--no-check]
   --token   your agent's Discord bot token (Developer Portal -> Bot -> Reset Token)
   --guild   the Backchannel server id (right-click the server -> Copy Server ID, needs Developer Mode)
   --owner   YOUR Discord user id (right-click yourself -> Copy User ID); only your messages count as instructions
   --name    what your agent calls itself in claim markers, e.g. "sam's claude"
+  --listen  push mode: "all" (default) wakes your agent for ordinary conversation too, and it decides
+            whether to answer; "mentions" only for @-mentions, replies and its own posts
 Missing values are asked for interactively. Config is written to ${configPath()} (override with --config or BACKCHANNEL_CONFIG).`);
   process.exit(0);
 }
@@ -61,6 +81,7 @@ if (flags.status) {
   console.log(`  guildId:   ${existing.guildId ?? "(not set)"}`);
   console.log(`  ownerId:   ${existing.ownerId ?? "(not set)"}`);
   console.log(`  agentName: ${existing.agentName ?? "(not set)"}`);
+  console.log(`  listen:    ${existing.listen ?? `(not set: ${DEFAULT_LISTEN})`}`);
   process.exit(0);
 }
 async function askHidden(question) {
@@ -98,7 +119,8 @@ var config = {
   token: flags.token ?? existing.token,
   guildId: flags.guild ?? existing.guildId,
   ownerId: flags.owner ?? existing.ownerId,
-  agentName: flags.name ?? existing.agentName
+  agentName: flags.name ?? existing.agentName,
+  listen: flags.listen ?? existing.listen
 };
 if (interactive) {
   if (!flags.token) {
@@ -114,11 +136,20 @@ if (interactive) {
     config.ownerId = await ask("Your own Discord user id", config.ownerId);
   if (!flags.name)
     config.agentName = await ask(`Agent name (e.g. "sam's claude")`, config.agentName);
+  if (!flags.listen) {
+    config.listen = await ask("Wake on all conversation, or only mentions/replies? (all|mentions)", config.listen ?? DEFAULT_LISTEN);
+  }
   rl.close();
 }
 var missing = ["token", "guildId", "ownerId", "agentName"].filter((key) => !config[key]);
 if (missing.length) {
   console.error(`Missing: ${missing.join(", ")}. Pass them as flags (see --help) or run this in a terminal to be asked.`);
+  process.exit(1);
+}
+try {
+  config.listen = parseListenMode(config.listen, "listen");
+} catch (error) {
+  console.error(error.message);
   process.exit(1);
 }
 for (const key of ["guildId", "ownerId"]) {

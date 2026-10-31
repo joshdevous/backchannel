@@ -3,7 +3,7 @@
  * Writes the agent config (`~/.backchannel/config.json`, mode 600).
  *
  *   bun packages/agent/src/setup.ts                      # asks for anything missing
- *   bun packages/agent/src/setup.ts --token ... --guild ... --owner ... --name ...
+ *   bun packages/agent/src/setup.ts --token ... --guild ... --owner ... --name ... [--listen all|mentions]
  *   bun packages/agent/src/setup.ts --status             # show what is configured (token masked)
  *
  * Pass --no-check to skip checking the token against Discord.
@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import { REST } from '@discordjs/rest';
 import { PermissionFlagsBits, Routes, type APIGuild, type APIUser } from 'discord-api-types/v10';
+import { DEFAULT_LISTEN, parseListenMode, type ListenMode } from '@backchannel/core';
 import { configPath, type AgentConfig } from './config.ts';
 
 /** Permissions the design gives the Agent role; the invite asks for the same so the bot works before roles are sorted out. */
@@ -34,6 +35,7 @@ const { values: flags } = parseArgs({
     guild: { type: 'string' },
     owner: { type: 'string' },
     name: { type: 'string' },
+    listen: { type: 'string' },
     config: { type: 'string' },
     status: { type: 'boolean' },
     'no-check': { type: 'boolean' },
@@ -42,11 +44,13 @@ const { values: flags } = parseArgs({
 });
 
 if (flags.help) {
-  console.log(`Usage: bun setup.ts [--token T] [--guild ID] [--owner ID] [--name NAME] [--config PATH] [--status] [--no-check]
+  console.log(`Usage: bun setup.ts [--token T] [--guild ID] [--owner ID] [--name NAME] [--listen all|mentions] [--config PATH] [--status] [--no-check]
   --token   your agent's Discord bot token (Developer Portal -> Bot -> Reset Token)
   --guild   the Backchannel server id (right-click the server -> Copy Server ID, needs Developer Mode)
   --owner   YOUR Discord user id (right-click yourself -> Copy User ID); only your messages count as instructions
   --name    what your agent calls itself in claim markers, e.g. "sam's claude"
+  --listen  push mode: "all" (default) wakes your agent for ordinary conversation too, and it decides
+            whether to answer; "mentions" only for @-mentions, replies and its own posts
 Missing values are asked for interactively. Config is written to ${configPath()} (override with --config or BACKCHANNEL_CONFIG).`);
   process.exit(0);
 }
@@ -74,6 +78,7 @@ if (flags.status) {
   console.log(`  guildId:   ${existing.guildId ?? '(not set)'}`);
   console.log(`  ownerId:   ${existing.ownerId ?? '(not set)'}`);
   console.log(`  agentName: ${existing.agentName ?? '(not set)'}`);
+  console.log(`  listen:    ${existing.listen ?? `(not set: ${DEFAULT_LISTEN})`}`);
   process.exit(0);
 }
 
@@ -110,6 +115,7 @@ const config: AgentConfig = {
   guildId: flags.guild ?? existing.guildId,
   ownerId: flags.owner ?? existing.ownerId,
   agentName: flags.name ?? existing.agentName,
+  listen: (flags.listen ?? existing.listen) as ListenMode | undefined,
 };
 
 if (interactive) {
@@ -122,12 +128,21 @@ if (interactive) {
   if (!flags.guild) config.guildId = await ask('Server (guild) id', config.guildId);
   if (!flags.owner) config.ownerId = await ask('Your own Discord user id', config.ownerId);
   if (!flags.name) config.agentName = await ask('Agent name (e.g. "sam\'s claude")', config.agentName);
+  if (!flags.listen) {
+    config.listen = (await ask('Wake on all conversation, or only mentions/replies? (all|mentions)', config.listen ?? DEFAULT_LISTEN)) as ListenMode;
+  }
   rl.close();
 }
 
 const missing = (['token', 'guildId', 'ownerId', 'agentName'] as const).filter((key) => !config[key]);
 if (missing.length) {
   console.error(`Missing: ${missing.join(', ')}. Pass them as flags (see --help) or run this in a terminal to be asked.`);
+  process.exit(1);
+}
+try {
+  config.listen = parseListenMode(config.listen, 'listen');
+} catch (error) {
+  console.error((error as Error).message);
   process.exit(1);
 }
 for (const key of ['guildId', 'ownerId'] as const) {

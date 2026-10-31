@@ -1,14 +1,15 @@
 /**
- * Wakes Josh's agent (an Atlas chat) for Backchannel messages aimed at it: one Atlas chat per
+ * Wakes Josh's agent (an Atlas chat) for Backchannel messages it should hear: one Atlas chat per
  * Discord channel (forum post, thread or channel), opened on the first wake and messaged after.
  */
+import { isDirect } from '@backchannel/core';
 import { firstBrief, followUp, type BriefContext } from './atlas-brief.ts';
 import type { AtlasChats } from './atlas-device.ts';
 import type { AtlasChat, AtlasStore } from './atlas-store.ts';
 import { log, logError } from './log.ts';
 import type { TurnState, TypingStarter } from './presence.ts';
 import { TIMED_OUT, withTimeout } from './timeout.ts';
-import type { WakeEvent, Waker } from './waker.ts';
+import type { ChannelMessage, WakeEvent, Waker } from './waker.ts';
 
 export interface AtlasWakerOptions extends BriefContext {
   store: AtlasStore;
@@ -24,7 +25,7 @@ export interface AtlasWakerOptions extends BriefContext {
 /** At most one spawn per channel in this window. */
 export const SPAWN_INTERVAL_MS = 10 * 60_000;
 /** At most `MAX_WAKES_PER_HOUR` spawns and deliveries, across all channels, per sliding hour. */
-export const MAX_WAKES_PER_HOUR = 20;
+export const MAX_WAKES_PER_HOUR = 120;
 const HOUR_MS = 60 * 60_000;
 /**
  * How long one wake waits for a spawn before moving on. The spawn itself keeps going and still
@@ -38,6 +39,9 @@ export const SPAWN_WAIT_MS = 3 * 60_000;
  * handshook.
  */
 export const SPAWN_STUCK_MS = 30 * 60_000;
+
+/** How long a first brief waits for the earlier messages before going out without them. */
+const EARLIER_WAIT_MS = 10_000;
 
 export type WakeDecision =
   | { kind: 'deliver' }
@@ -102,8 +106,9 @@ export class AtlasWaker implements Waker {
       return;
     }
 
-    // Heard and about to act: show it at once, before the spawn or delivery takes its time.
-    this.#options.presence?.startTyping(event.channelId, () => this.#turnState(event.channelId));
+    // Asked directly and about to act: show it at once, before the spawn or delivery takes its
+    // time. An overheard (ambient) batch may well get no answer, so it shows nothing.
+    if (isDirect(event.reason)) this.#options.presence?.startTyping(event.channelId, () => this.#turnState(event.channelId));
 
     try {
       if (decision.kind === 'deliver') {
@@ -133,6 +138,19 @@ export class AtlasWaker implements Waker {
     return run?.turnOpen === true ? 'open' : 'closed';
   }
 
+  /** The messages before the batch, for a new chat's first brief. Best effort: none on failure. */
+  async #earlier(event: WakeEvent): Promise<ChannelMessage[]> {
+    if (!event.earlier) return [];
+    try {
+      const result = await withTimeout(event.earlier(), EARLIER_WAIT_MS);
+      if (result !== TIMED_OUT) return result;
+      log(`atlas wake: earlier messages not fetched within ${EARLIER_WAIT_MS / 1000}s channel=${event.channelId}`);
+    } catch (err) {
+      logError(`atlas wake: could not fetch earlier messages channel=${event.channelId}`, err);
+    }
+    return [];
+  }
+
   /** One spawn attempt, settled in the store under its own request id whenever it finishes. */
   async #spawn(requestId: string, event: WakeEvent): Promise<void> {
     const { store, chats, cwd } = this.#options;
@@ -153,7 +171,8 @@ export class AtlasWaker implements Waker {
     // Mapped before the prompt goes out: whatever happens to the prompt, the next wake for
     // this channel messages this chat instead of opening another.
     try {
-      const outcome = await chats.deliver(chat, firstBrief(event, this.#options));
+      const earlier = await this.#earlier(event);
+      const outcome = await chats.deliver(chat, firstBrief(event, this.#options, earlier));
       log(`atlas wake spawned+${outcome} channel=${event.channelId} request=${requestId} session=${chat.acpSessionId}`);
     } catch (err) {
       logError(`atlas wake first prompt failed channel=${event.channelId} session=${chat.acpSessionId}`, err);

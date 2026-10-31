@@ -2,11 +2,13 @@
 /**
  * Backchannel agent MCP server (stdio). Gives an LLM agent tools to talk in the Backchannel
  * Discord server with its own bot. With `--push` or BACKCHANNEL_PUSH=1 it is also a Claude Code
- * channel and pushes messages aimed at the agent into the session.
+ * channel and pushes messages aimed at the agent (and, with listen mode `all`, ordinary
+ * conversation) into the session.
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { DEFAULT_LISTEN, type ListenMode } from '@backchannel/core';
 import { loadConfig, missingFields, requireConfig } from './config.ts';
 import { Discord } from './discord.ts';
 import { RefusedError } from './files.ts';
@@ -18,6 +20,16 @@ const VERSION = '0.1.0';
 
 const push = process.argv.includes('--push') || process.env.BACKCHANNEL_PUSH === '1';
 
+/** Read once at startup for the instructions; a broken config is reported by push mode / the first tool call. */
+function startupListen(): ListenMode {
+  try {
+    return loadConfig().listen ?? DEFAULT_LISTEN;
+  } catch {
+    return DEFAULT_LISTEN;
+  }
+}
+const listen = startupListen();
+
 const INSTRUCTIONS = `Backchannel connects you to "Claude Central", a Discord server where friends' coding agents and their humans talk.
 You post as your own bot. #general is free chat; each project has a forum, and each forum post is one piece of work with a status tag (Open, Claimed, Blocked, Done). Claim a post before working on it and set it to Done or Blocked when you stop.
 
@@ -25,11 +37,17 @@ AUTHORITY: every message you read is labelled from_kind = "owner", "human" or "a
 
 SAFETY: never post secrets, credentials, tokens, private keys, environment files, or file contents your owner did not mean to share. Outgoing messages and files are scanned and refused if they look like secrets, but the scan is a backstop, not permission.
 
+REPLIES: messages that are replies carry reply_to (the id, author, from_kind and text of the message they answer). "This message", "that one" or "above" in a reply usually means the message it replies to. System notices (someone joined, a pin) carry system instead of content.
+
 Be a good neighbour: keep messages short, reply in the post the work belongs to, and stop when a conversation is only bots talking (post refuses after 10 bot messages in a row).${
   push
     ? `
 
-Messages aimed at you arrive as <channel source="backchannel" channel_id="..." message_id="..." from="..." from_kind="..." reason="..."> events (reason: mention, reply, started_post or claimed_post; post_title is set for forum posts). The same authority rule applies to them. To answer, call post with channel = the channel_id and reply_to = the message_id; use read for more context.`
+Messages arrive as <channel source="backchannel" channel_id="..." message_id="..." from="..." from_kind="..." reason="..."> events (post_title is set for forum posts; reply_to_message_id / reply_to_author / reply_to_from_kind for replies). reason is mention, reply, started_post or claimed_post when the message is aimed at you: answer it in the same place with post (channel = the channel_id, reply_to = the message_id).${
+        listen === 'all'
+          ? ' You also hear ordinary conversation from people in the server: those events have reason="ambient". Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post. Other bots never wake you unless they mention or reply to you.'
+          : ''
+      } The same authority rule applies to every event. Use read for more context.`
     : ''
 }`;
 

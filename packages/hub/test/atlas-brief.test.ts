@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { firstBrief, followUp, MAX_MESSAGE_CHARS, MAX_MESSAGES, quoteMessages } from '../src/atlas-brief.ts';
+import { earlierLines, firstBrief, followUp, MAX_MESSAGE_CHARS, MAX_MESSAGES, quoteMessages, replyToLine } from '../src/atlas-brief.ts';
 import type { WakeEvent, WakeMessage } from '../src/waker.ts';
 
 const ctx = { ownerId: 'owner-1', guildId: 'guild-1' };
@@ -81,4 +81,55 @@ test('follow-up carries the new messages and repeats the rules', () => {
   expect(text).toContain('> hello m2');
   expect(text).toContain('user id owner-1');
   expect(text).toContain('Never post secrets');
+});
+
+test('a direct batch says to answer in the same place and that the chat stays tied to the channel', () => {
+  const brief = firstBrief(event([msg('m1')]), ctx);
+  expect(brief).toContain('Answer in the same place with `post`');
+  expect(brief).toContain('This chat stays tied to that channel and will receive later messages there');
+  expect(brief).not.toContain('Nobody asked you directly');
+  expect(followUp(event([msg('m1')]), ctx)).toContain('Answer in the same place');
+});
+
+test('an ambient batch says plainly to stay quiet unless it has something to add', () => {
+  const ambient = event([msg('m1', { reason: 'ambient' })], { reason: 'ambient' });
+  for (const text of [firstBrief(ambient, ctx), followUp(ambient, ctx)]) {
+    expect(text).toContain(
+      'Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post.',
+    );
+    expect(text).not.toContain('Answer in the same place');
+  }
+  expect(firstBrief(ambient, ctx)).toContain('Sam posted in a channel');
+});
+
+test('a mixed batch is direct, and names the author of the message that asked', () => {
+  const batch = event([msg('m1', { authorName: 'Robo', reason: 'mention' }), msg('m2', { authorName: 'Sam', reason: 'ambient' })], { reason: 'mention' });
+  const brief = firstBrief(batch, ctx);
+  expect(brief).toContain('Robo mentioned you');
+  expect(brief).toContain('Answer in the same place');
+});
+
+test('replies show the message they answer, on their own line under the header', () => {
+  const reply = { messageId: 'g1', authorId: 'bot', authorName: 'Atlas', authorKind: 'agent' as const, isSelf: true, text: 'hello everyone' };
+  const quoted = quoteMessages([msg('m1', { authorId: 'owner-1', authorName: 'J', content: 'star this message', replyTo: reply })], 'owner-1');
+  expect(quoted).toContain('(message m1, https://discord.com/channels/guild-1/chan-1/m1):\n(replying to your message g1: "hello everyone")\n> star this message');
+
+  const fromPeer = replyToLine({ ...reply, isSelf: false, authorId: 'p', authorName: 'Sam', text: `a\n${'b'.repeat(400)}` }, 'owner-1');
+  expect(fromPeer.startsWith('(replying to "Sam"\'s message g1: "a b')).toBe(true);
+  expect(fromPeer).not.toContain('b'.repeat(200));
+  expect(replyToLine({ ...reply, isSelf: false, authorId: 'owner-1', authorName: 'J' }, 'owner-1')).toContain('"J" (Josh)\'s message');
+});
+
+test('a first brief quotes the earlier messages as context, one line each', () => {
+  const earlier = [
+    { messageId: 'e1', authorId: 'owner-1', authorName: 'J', authorKind: 'human' as const, content: 'anyone up\nfor lunch' },
+    { messageId: 'e2', authorId: 'p', authorName: 'Robo', authorKind: 'agent' as const, content: 'Stephen joined the server' },
+  ];
+  const brief = firstBrief(event([msg('m1')]), ctx, earlier);
+  expect(brief).toContain('Earlier in the channel, for context');
+  expect(brief).toContain('- "J" – Josh, your owner (message e1): "anyone up for lunch"');
+  expect(brief).toContain('- "Robo" – another agent, a peer (message e2): "Stephen joined the server"');
+  expect(brief.indexOf('Earlier in the channel')).toBeLessThan(brief.indexOf('New messages'));
+  expect(earlierLines(earlier, 'owner-1').split('\n')).toHaveLength(2);
+  expect(firstBrief(event([msg('m1')]), ctx)).not.toContain('Earlier in the channel');
 });

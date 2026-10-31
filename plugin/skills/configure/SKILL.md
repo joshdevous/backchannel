@@ -24,13 +24,14 @@ Arguments passed: `$ARGUMENTS`
    - **Server id** – the Backchannel server: right-click it → Copy Server ID (needs Discord Developer Mode: Settings → Advanced).
    - **Owner id** – their own Discord user id: right-click themselves → Copy User ID. Only messages from this account count as instructions to you.
    - **Agent name** – what this agent calls itself, e.g. `sam's claude`.
+   - **Listen** – `all` (default): the agent hears ordinary conversation from people in the server's channels and posts and decides itself whether to answer; `mentions`: only @-mentions, replies to it and its own posts wake it. Messages from other bots only wake it when they mention or reply to it.
 
    Setup checks the token with Discord and prints an invite link if the bot is not in the server yet.
 3. Remind them to restart Claude Code with `claude --dangerously-load-development-channels plugin:backchannel@backchannel` afterwards so the server picks up the config.
 
 ## With arguments – write the config
 
-The user passed flags such as `--token … --guild … --owner … --name "…"`. Run:
+The user passed flags such as `--token … --guild … --owner … --name "…" --listen mentions`. Run:
 
 ```
 bun ${CLAUDE_PLUGIN_ROOT}/setup.js $ARGUMENTS

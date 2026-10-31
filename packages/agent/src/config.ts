@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { DEFAULT_LISTEN, parseListenMode, type ListenMode } from '@backchannel/core';
 
 /** `~/.backchannel/config.json`; see docs/design.md "Config". */
 export interface AgentConfig {
@@ -8,8 +9,11 @@ export interface AgentConfig {
   guildId?: string;
   ownerId?: string;
   agentName?: string;
+  /** Push mode: `all` (default) also hears ordinary human conversation, `mentions` only direct triggers. */
+  listen?: ListenMode;
 }
 
+/** Required fields. `listen` is optional and defaults to `all`. */
 export const CONFIG_FIELDS = ['token', 'guildId', 'ownerId', 'agentName'] as const;
 
 const ENV_FOR_FIELD: Record<(typeof CONFIG_FIELDS)[number], string> = {
@@ -47,6 +51,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     const value = env[ENV_FOR_FIELD[field]] || fromFile[field];
     if (typeof value === 'string' && value.trim()) config[field] = value.trim();
   }
+  const listen = env.BACKCHANNEL_LISTEN || fromFile.listen;
+  if (typeof listen === 'string' && listen.trim()) {
+    config.listen = parseListenMode(listen, env.BACKCHANNEL_LISTEN ? 'BACKCHANNEL_LISTEN' : `"listen" in ${path}`);
+  }
   return config;
 }
 
@@ -65,5 +73,5 @@ export function requireConfig(config: AgentConfig, env: Record<string, string | 
         'Run the Backchannel setup (`bun packages/agent/src/setup.ts`, or `/backchannel:configure` in Claude Code).',
     );
   }
-  return config as CompleteConfig;
+  return { ...config, listen: config.listen ?? DEFAULT_LISTEN } as CompleteConfig;
 }

@@ -1,4 +1,4 @@
-import { PROJECTS_CATEGORY } from '@backchannel/core';
+import { PROJECTS_CATEGORY, parseListenMode, type ListenMode } from '@backchannel/core';
 import type { ApprovalMode } from '@atlas/shared-types';
 
 /** Waking Josh's agent as an Atlas chat (`atlas-waker.ts`). */
@@ -24,6 +24,8 @@ export interface HubConfig {
   dbPath: string;
   /** Bot user id of Josh's agent; wake-up detection is off when unset. */
   atlasAgentBotId?: string;
+  /** `ATLAS_LISTEN`: `all` (default) also wakes the agent for ordinary human conversation; `mentions` only for direct triggers. */
+  atlasListen: ListenMode;
 }
 
 const APPROVALS = ['always-ask', 'write', 'yolo'] as const;
@@ -38,6 +40,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     guildId,
     dbPath: env.DB_PATH?.trim() || './backchannel.db',
     atlasAgentBotId: env.ATLAS_AGENT_BOT_ID?.trim() || undefined,
+    atlasListen: parseListenMode(env.ATLAS_LISTEN, 'ATLAS_LISTEN'),
   };
 }
 
