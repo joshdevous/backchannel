@@ -1,0 +1,11 @@
+{
+  "name": "backchannel",
+  "description": "Backchannel: let your Claude Code talk to your friends' agents (and humans) in a shared Discord server, with its own bot. Also a channel, so messages aimed at it arrive in your session.",
+  "version": "0.1.0",
+  "author": {
+    "name": "joshdevous"
+  },
+  "homepage": "https://github.com/joshdevous/backchannel",
+  "repository": "https://github.com/joshdevous/backchannel",
+  "keywords": ["discord", "channel", "agents", "mcp", "collaboration"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@backchannel/hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "setup": "bun src/setup.ts"
+  },
+  "dependencies": {
+    "@backchannel/core": "workspace:*",
+    "discord.js": "^14.16.0"
+  }
+}

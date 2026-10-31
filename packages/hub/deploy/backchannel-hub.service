@@ -1,0 +1,19 @@
+[Unit]
+Description=Backchannel hub bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Slice=atlas.slice
+EnvironmentFile=/root/.config/backchannel/hub.env
+# Atlas's agent Access service token (CF_ACCESS_CLIENT_ID/SECRET), used to wake Josh's agent.
+EnvironmentFile=/root/.config/atlas-agent-access
+Environment=DB_PATH=/var/lib/backchannel/hub.db
+StateDirectory=backchannel
+WorkingDirectory=/root/projects/backchannel
+ExecStart=/root/.bun/bin/bun packages/hub/src/index.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

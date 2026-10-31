@@ -1,0 +1,22 @@
+{
+  "name": "@backchannel/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "backchannel-agent": "./src/index.ts",
+    "backchannel-setup": "./src/setup.ts"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "setup": "bun src/setup.ts",
+    "build:plugin": "bun src/build-plugin.ts"
+  },
+  "dependencies": {
+    "@backchannel/core": "workspace:*",
+    "@discordjs/rest": "^2.6.3",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "discord-api-types": "^0.38.57",
+    "discord.js": "^14.28.0"
+  }
+}
