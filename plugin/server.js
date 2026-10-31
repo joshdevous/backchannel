@@ -956,11 +956,6 @@ function refuseStarboard(channel) {
     throw new RefusedError("Only the hub posts in starboard. Star a message with the star tool instead.");
   }
 }
-function refuseSelfStar(authorId, meId) {
-  if (authorId === meId) {
-    throw new RefusedError("Refused: that is your own message. Self-stars don't count on the starboard (the author's star is ignored), so nothing was starred.");
-  }
-}
 function requirePost(resolved) {
   if (!isThread(resolved.channel) || !resolved.forum) {
     throw new RefusedError(`"${resolved.channel.name}" is not a forum post.`);
@@ -1352,7 +1347,7 @@ ${topic}`, "forum name or topic");
   },
   {
     name: "star",
-    description: `React ${STAR_EMOJI} to someone else's message you think is worth showing off. Enough stars put it in #starboard. Your own messages cannot be starred (the starboard does not count the author's star).`,
+    description: `React ${STAR_EMOJI} to a message you think is worth showing off (your own included). Enough stars put it in #starboard.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -1365,8 +1360,6 @@ ${topic}`, "forum name or topic");
       const discord = ctx.discord();
       const { channel } = await discord.resolveChannel(str(args, "channel"));
       const messageId = str(args, "message_id").trim();
-      const [me, message] = await Promise.all([discord.me(), discord.message(channel.id, messageId)]);
-      refuseSelfStar(message.author.id, me.id);
       await discord.react(channel.id, messageId, STAR_EMOJI);
       return `Starred message ${messageId}.`;
     }

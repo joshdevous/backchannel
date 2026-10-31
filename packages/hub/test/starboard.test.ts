@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
 import { countStars, starAction, truncate } from '../src/starboard.ts';
 
-test('countStars ignores the author and duplicates', () => {
-  expect(countStars(['a', 'b', 'c'], 'a')).toBe(2);
-  expect(countStars(['b', 'b', 'c'], 'a')).toBe(2);
-  expect(countStars([], 'a')).toBe(0);
+test('countStars counts distinct reactors, the author included', () => {
+  expect(countStars(['a', 'b', 'c'])).toBe(3);
+  expect(countStars(['b', 'b', 'c'])).toBe(2);
+  expect(countStars([])).toBe(0);
 });
 
 test('starAction posts at the threshold once, then only updates', () => {

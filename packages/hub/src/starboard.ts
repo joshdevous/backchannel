@@ -21,11 +21,9 @@ import {
 } from 'discord.js';
 import { log, logError } from './log.ts';
 
-/** Distinct reactors, not counting the message's own author. */
-export function countStars(reactorIds: Iterable<string>, authorId: string): number {
-  const distinct = new Set(reactorIds);
-  distinct.delete(authorId);
-  return distinct.size;
+/** Distinct reactors. The author's own star counts too. */
+export function countStars(reactorIds: Iterable<string>): number {
+  return new Set(reactorIds).size;
 }
 
 export type StarAction = 'post' | 'update' | 'none';
@@ -107,7 +105,7 @@ export function startStarboard(client: Client<true>, db: Database, guildId: stri
     if (!starboard?.isTextBased()) return;
     if (message.channelId === starboard.id) return;
 
-    const count = countStars(await fetchReactorIds(full), message.author.id);
+    const count = countStars(await fetchReactorIds(full));
     const existing = find.get(message.id);
     const action = starAction(count, existing !== null);
     if (action === 'none') return;
