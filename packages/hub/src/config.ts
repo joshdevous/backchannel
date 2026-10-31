@@ -1,5 +1,6 @@
 import { PROJECTS_CATEGORY, parseListenMode, type ListenMode } from '@backchannel/core';
 import type { ApprovalMode } from '@atlas/shared-types';
+import { DEFAULT_OMP_BIN } from './project-classifier.ts';
 
 /** Waking Josh's agent as an Atlas chat (`atlas-waker.ts`). */
 export interface AtlasWakeConfig {
@@ -12,8 +13,12 @@ export interface AtlasWakeConfig {
   accessClientSecret: string;
   deviceId: string;
   machineId: string;
-  /** Working directory of every chat the hub opens. */
+  /** Working directory of a chat whose project has no checkout on this machine. */
   cwd: string;
+  /** `ATLAS_DEFAULT_PROJECT`: the project for chat that is not about any specific one. */
+  defaultProject: string;
+  /** `OMP_BIN`: the omp the project classifier runs. */
+  ompBin: string;
   /** omp approval mode for those chats; absent means omp's own default. */
   approval?: ApprovalMode;
 }
@@ -77,6 +82,8 @@ export function loadAtlasWakeConfig(env: Record<string, string | undefined>): At
     deviceId: env.ATLAS_WAKE_DEVICE_ID?.trim() || 'backchannel-hub',
     machineId: env.ATLAS_WAKE_MACHINE?.trim() || 'atlas-vps',
     cwd: env.ATLAS_WAKE_CWD?.trim() || '/root/chats',
+    defaultProject: env.ATLAS_DEFAULT_PROJECT?.trim() || 'Backchannel',
+    ompBin: env.OMP_BIN?.trim() || DEFAULT_OMP_BIN,
     approval: approval === 'default' ? undefined : (approval as ApprovalMode),
   };
 }

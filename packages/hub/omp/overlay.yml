@@ -1,0 +1,4 @@
+# Applied with `omp --config` for the hub's project classifier calls only (project-classifier.ts).
+# Memory off: a classification must never trigger a recall or be retained as a memory.
+memory:
+  backend: off

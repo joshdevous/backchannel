@@ -25,7 +25,7 @@ import {
   type MachineInfo,
   type SessionInfo,
 } from '@atlas/shared-types';
-import type { AtlasChat } from './atlas-store.ts';
+import type { ChatTarget } from './atlas-store.ts';
 import { log, logError } from './log.ts';
 import { TIMED_OUT, withTimeout } from './timeout.ts';
 
@@ -47,9 +47,9 @@ export interface AtlasDeviceOptions {
 /** The chats a target channel can be tied to – what the waker needs from Atlas. */
 export interface AtlasChats {
   /** Opens a new chat in `cwd`. Resolves once the conversation exists; prompts nothing. */
-  spawn(cwd: string, requestId: string): Promise<Omit<AtlasChat, 'channelId'>>;
+  spawn(cwd: string, requestId: string): Promise<ChatTarget>;
   /** Hands `text` to an existing chat: steer into a live turn, else prompt (resuming if closed). */
-  deliver(chat: Omit<AtlasChat, 'channelId'>, text: string): Promise<DeliveryOutcome>;
+  deliver(chat: ChatTarget, text: string): Promise<DeliveryOutcome>;
   /** The live run holding this conversation, from the relay's session list; `undefined` when none. */
   liveRun(machineId: MachineId, acpSessionId: string): Promise<SessionInfo | undefined>;
   stop(): void;
@@ -140,7 +140,7 @@ export class AtlasDevice implements AtlasChats {
     return machine;
   }
 
-  async spawn(cwd: string, requestId: string): Promise<Omit<AtlasChat, 'channelId'>> {
+  async spawn(cwd: string, requestId: string): Promise<ChatTarget> {
     const machine = await this.machine();
     this.#lastSpawnRequestId = undefined;
     const spawning = this.#client.spawnSession(
@@ -164,7 +164,7 @@ export class AtlasDevice implements AtlasChats {
     return { acpSessionId: handle.acpSessionId, machineId: handle.machineId, cwd: handle.cwd };
   }
 
-  async deliver(chat: Omit<AtlasChat, 'channelId'>, text: string): Promise<DeliveryOutcome> {
+  async deliver(chat: ChatTarget, text: string): Promise<DeliveryOutcome> {
     await this.ready();
     const fresh = this.#fresh.get(chat.acpSessionId);
     if (fresh) {

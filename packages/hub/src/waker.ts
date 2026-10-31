@@ -44,6 +44,8 @@ export interface WakeEvent extends WakeMessage {
   /** Forum post title, only for messages inside a forum post. */
   postTitle?: string;
   forumName?: string;
+  /** Channel name (`general`), only for messages outside a forum post. */
+  channelName?: string;
   messages: WakeMessage[];
   /**
    * The messages just before the batch, oldest first. Fetched only when asked, so only a first

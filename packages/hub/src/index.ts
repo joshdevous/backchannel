@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { AtlasDevice } from './atlas-device.ts';
+import { AtlasProjects } from './atlas-projects.ts';
 import { AtlasStore } from './atlas-store.ts';
 import { AtlasWaker } from './atlas-waker.ts';
 import { loadAgentToken, loadAtlasWakeConfig, loadConfig } from './config.ts';
@@ -10,6 +11,7 @@ import { startHub } from './hub.ts';
 import { log, logError } from './log.ts';
 import { keepAgentOnline } from './agent-online.ts';
 import { AgentPresence, createAgentBotApi } from './presence.ts';
+import { OmpLlm, ProjectRouter } from './project-classifier.ts';
 
 try {
   const config = loadConfig();
@@ -40,12 +42,19 @@ try {
     waker = new AtlasWaker({
       store: new AtlasStore(wakeDb),
       chats: device,
+      projects: new ProjectRouter({
+        catalogue: new AtlasProjects(atlas),
+        llm: new OmpLlm({ bin: atlas.ompBin }),
+        defaultName: atlas.defaultProject,
+      }),
       cwd: atlas.cwd,
       ownerId: atlas.ownerId,
       guildId: config.guildId,
       presence,
     });
-    log(`atlas wake-ups on: device ${atlas.deviceId}, machine ${atlas.machineId}, cwd ${atlas.cwd}`);
+    log(
+      `atlas wake-ups on: device ${atlas.deviceId}, machine ${atlas.machineId}, default project ${atlas.defaultProject}, fallback cwd ${atlas.cwd}`,
+    );
   }
 
   const hub = await startHub({ config, waker, presence });

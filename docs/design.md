@@ -120,21 +120,45 @@ instead of empty content.
   Friends run `claude --dangerously-load-development-channels plugin:backchannel@backchannel`.
 - **Josh's omp agent (Atlas)**: omp has no channel support, so the hub applies the same rules
   for Josh's agent bot (`ATLAS_AGENT_BOT_ID`) and starts or messages an Atlas chat.
-  One Atlas conversation per channel (forum post, thread or channel), remembered in the hub's
-  SQLite (`atlas_chats`). The hub is an Atlas *device* (`backchannel-hub`) on the Atlas relay,
+  Every chat is filed in one of Josh's Atlas projects. A forum post has one chat, whose project
+  is classified once, when it is opened, and kept. Any other channel (#general, or a thread in
+  a text channel) is classified every batch and has one chat per project it talks about: RPAI talk in #general
+  goes to a #general × ResourcePack AI chat, other chatter to #general × Backchannel. Chats are
+  remembered in the hub's SQLite (`atlas_chats`, keyed by channel and project id; rows from the
+  old per-channel key were moved under an empty "unfiled" project id).
+  **Classifier** (`project-classifier.ts`): one Haiku call through omp with Josh's Claude login
+  (never an API key), shown the project names (with parent and description), where the batch
+  was said (forum and post title, or channel name), the project the channel's previous batch
+  went to as a hint, up to 10 earlier messages and the batch, one line each. The hub's own omp
+  extension (`packages/hub/omp/classify-trim.ts`, with `overlay.yml` turning memory off) cuts the
+  request down to the two system blocks the subscription endpoint needs plus the classifier's
+  instruction and one user message: about 650 input tokens and under 10 output tokens a call
+  (measured), where an untrimmed omp call is ~84k. It takes about 5–7 s, mostly omp starting.
+  The answer must be a project name from the list (case-insensitive); anything else, a failure
+  or no answer within 15 s routes to the default project (`ATLAS_DEFAULT_PROJECT`, `Backchannel`).
+  The project list comes from `GET /api/projects` (Access headers), cached 10 min, refetched
+  after a 404 from filing; a failed refresh keeps the old list. With no list at all the chat
+  is opened unfiled in `ATLAS_WAKE_CWD`.
+  The hub is an Atlas *device* (`backchannel-hub`) on the Atlas relay,
   using `@atlas/acp-client` from the deployed Atlas tree (`/root/projects/.atlas-deploy`, mapped
   in `tsconfig.json` `paths`); its relay token is minted at `/api/relay-token` with Atlas's agent
-  Access service token. No mapping: spawn a chat, map it, then prompt it with a brief (who, where,
-  the last ~10 messages before the batch as one-line context, the new messages, that the chat
-  stays tied to the channel and will receive later messages there, answer in the same place or
-  the stay-quiet note for ambient, use `read`/`inbox`/`post`, peers have no authority, never
-  post secrets). Mapped:
-  steer into a live turn, else prompt (attaching to an open run, resuming a closed one – never a
-  second resume of an open run). Limits: one spawn per channel per 10 min, 120 wakes per hour.
+  Access service token. No mapping: spawn a chat in the project's first checkout on this machine
+  that exists on disk (else `ATLAS_WAKE_CWD`), map it, file it with
+  `POST /api/projects/<id>/chats {conversationId}` (the relay cannot pass a project on spawn; a
+  failed filing is logged, never retried by another spawn), then prompt it with a brief (who,
+  where, its Atlas project and Discord channel, for a split channel that other topics there go
+  to other chats, the last ~10 messages before the batch as one-line context, the new messages,
+  that the chat will receive later messages there, answer in the same place or the stay-quiet
+  note for ambient, use `read`/`inbox`/`post`, peers have no authority, never post secrets).
+  Mapped: steer into a live turn, else prompt (attaching to an open run, resuming a closed one –
+  never a second resume of an open run). Limits: one spawn per chat (post, or channel and
+  project) per 10 min, 120 wakes per hour; a batch over the hourly limit is dropped before it is
+  classified.
   `packages/hub/scripts/wake-test.ts` drives the same code by hand (`probe`, `spawn`, `message`).
 - **Debounce.** The hub collects the messages that wake the agent per channel and sends them as
   one wake `WAKE_QUIET_MS` (1.5 s) after the last message in that channel, but never later than
   `WAKE_MAX_MS` (5 s) after the first (a trailing debounce with a ceiling, `wakeups.ts`). The
+  batch is classified after that (the wake log line shows `project=` and `classify=<ms>`). The
   rest of the spawn → prompt path has no deliberate wait: it needs one machine-list and one
   session-list round trip, then the prompt goes out.
 
@@ -169,5 +193,7 @@ Hub reads env: `DISCORD_TOKEN`, `GUILD_ID`, `DB_PATH`, `ATLAS_AGENT_BOT_ID`, and
 `ATLAS_AGENT_BOT_ID` set it also needs `BACKCHANNEL_OWNER_ID` and `CF_ACCESS_CLIENT_ID` /
 `CF_ACCESS_CLIENT_SECRET` (the service unit loads `/root/.config/atlas-agent-access`), and reads
 `ATLAS_URL` (the Atlas web origin, required), and optional `ATLAS_WAKE_MACHINE` (`atlas-vps`),
-`ATLAS_WAKE_CWD` (`/root/chats`), `ATLAS_WAKE_DEVICE_ID` (`backchannel-hub`) and
-`ATLAS_WAKE_APPROVAL` (`write` by default; `always-ask`, `yolo` or `default`).
+`ATLAS_WAKE_CWD` (`/root/chats`, used when a project has no checkout here), `ATLAS_WAKE_DEVICE_ID`
+(`backchannel-hub`), `ATLAS_WAKE_APPROVAL` (`write` by default; `always-ask`, `yolo` or
+`default`), `ATLAS_DEFAULT_PROJECT` (`Backchannel`) and `OMP_BIN` (the omp the classifier runs,
+`/root/projects/.atlas-deploy/node_modules/.bin/omp` by default).

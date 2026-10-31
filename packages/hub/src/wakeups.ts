@@ -70,10 +70,13 @@ export function isMarker(content: string): boolean {
   return isClaimMarker(content) || isReleaseMarker(content);
 }
 
+/** Where a batch was posted, beyond its channel id. */
+export type WakeMeta = Pick<WakeEvent, 'postTitle' | 'forumName' | 'channelName'>;
+
 /** Folds the messages collected for one channel into the single event handed to the Waker. */
 export function mergeWakeMessages(
   channelId: string,
-  meta: { postTitle?: string; forumName?: string },
+  meta: WakeMeta,
   messages: readonly WakeMessage[],
 ): WakeEvent {
   const newest = messages[messages.length - 1];
@@ -240,7 +243,7 @@ export function startWakeDetection(
   presence?: WakePresence,
 ): WakeDetector {
   const claimants = new ClaimantCache();
-  const meta = new Map<string, { postTitle?: string; forumName?: string }>();
+  const meta = new Map<string, WakeMeta>();
   const hubId = client.user.id;
 
   const debouncer = new Debouncer<WakeMessage>(WAKE_QUIET_MS, WAKE_MAX_MS, async (channelId, messages) => {
@@ -304,7 +307,10 @@ export function startWakeDetection(
         jumpUrl: message.url,
         replyTo,
       };
-      if (thread) meta.set(thread.id, { postTitle: thread.name, forumName: thread.parent?.name });
+      meta.set(
+        message.channelId,
+        thread ? { postTitle: thread.name, forumName: thread.parent?.name } : { channelName: channel.name },
+      );
       // 👀 only when someone actually asked; an overheard message may well get no answer.
       if (isDirect(reason)) presence?.ack(message.channelId, message.id);
       debouncer.add(message.channelId, entry);

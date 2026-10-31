@@ -8,6 +8,17 @@ export interface BriefContext {
   guildId: string;
 }
 
+/** Which Atlas project a chat belongs to, and whether its channel is split across several chats. */
+export interface ChatScope {
+  /** Empty when the chat could not be filed in a project. */
+  projectName: string;
+  /**
+   * A plain channel (like #general) whose batches are sorted by project: this chat only gets the
+   * ones about its project. A forum post is never split.
+   */
+  split: boolean;
+}
+
 /** Longest single message quoted into a brief; the agent reads the rest with `read`. */
 export const MAX_MESSAGE_CHARS = 1500;
 /** Newest messages quoted into one brief; older ones in the batch are only counted. */
@@ -31,7 +42,17 @@ function where(event: WakeEvent, ctx: BriefContext): string {
     const forum = event.forumName !== undefined ? ` in the ${event.forumName} forum` : '';
     return `the forum post "${event.postTitle}"${forum} (${url})`;
   }
-  return `a channel (${url})`;
+  return event.channelName !== undefined ? `#${event.channelName} (${url})` : `a channel (${url})`;
+}
+
+/** What the first brief says about the chat's project and the channel it serves. */
+function scopeLine(event: WakeEvent, scope: ChatScope | undefined): string {
+  const tied = 'This chat stays tied to that channel and will receive later messages there, so you do not need to watch it yourself.';
+  if (!scope || scope.projectName === '') return tied;
+  const project = `the Atlas project "${scope.projectName}"`;
+  if (!scope.split) return `This chat is filed in ${project}. ${tied}`;
+  const channel = event.channelName !== undefined ? `#${event.channelName}` : 'this channel';
+  return `This chat is filed in ${project} and serves the conversation in ${channel} that belongs to it. The hub sorts ${channel} by topic: messages there about other projects, or general chat that is not about this one, go to other chats. This chat receives the later ${channel} messages sorted to ${project}, so you do not need to watch the channel yourself; use \`read\` to see everything said there.`;
 }
 
 /**
@@ -111,12 +132,17 @@ function howToAnswer(event: WakeEvent): string {
 }
 
 /** The first prompt of a chat spawned for this channel. `earlier`: the messages just before the batch. */
-export function firstBrief(event: WakeEvent, ctx: BriefContext, earlier: readonly ChannelMessage[] = []): string {
+export function firstBrief(
+  event: WakeEvent,
+  ctx: BriefContext,
+  earlier: readonly ChannelMessage[] = [],
+  scope?: ChatScope,
+): string {
   const who = trigger(event);
   const direct = isDirect(event.reason);
   return [
     `You were woken by Backchannel, the Discord server where friends' agents, their people and you talk to each other. On Discord you are Josh's agent. ${who.authorName} ${REASONS[event.reason]} in ${where(event, ctx)}.${direct ? '' : ' You are listening to the conversation there; nobody addressed you.'}`,
-    `Discord channel id: ${event.channelId} (the \`channel\` argument of the backchannel tools). This chat stays tied to that channel and will receive later messages there, so you do not need to watch it yourself.`,
+    `Discord channel id: ${event.channelId} (the \`channel\` argument of the backchannel tools). ${scopeLine(event, scope)}`,
     ...(earlier.length ? [`Earlier in the channel, for context (oldest first, shortened):\n${earlierLines(earlier, ctx.ownerId)}`] : []),
     `New messages, oldest first:\n\n${quoteMessages(event.messages, ctx.ownerId)}`,
     [
@@ -130,9 +156,10 @@ export function firstBrief(event: WakeEvent, ctx: BriefContext, earlier: readonl
 }
 
 /** New messages for a chat that is already tied to this channel. */
-export function followUp(event: WakeEvent, ctx: BriefContext): string {
+export function followUp(event: WakeEvent, ctx: BriefContext, scope?: ChatScope): string {
+  const sorted = scope?.split && scope.projectName !== '' ? `, sorted to this chat as about "${scope.projectName}"` : '';
   return [
-    `New Backchannel messages in ${where(event, ctx)}, channel id ${event.channelId}. Read more with \`read\`.`,
+    `New Backchannel messages in ${where(event, ctx)}, channel id ${event.channelId}${sorted}. Read more with \`read\`.`,
     quoteMessages(event.messages, ctx.ownerId),
     howToAnswer(event),
     rules(ctx.ownerId),
