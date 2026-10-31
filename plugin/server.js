@@ -781,6 +781,49 @@ async function defaultFetchText(url) {
   return response.text();
 }
 
+var RAW_MENTION = /<@!?(\d{17,20})>/g;
+function splitCode(text) {
+  return text.split(/(```[\s\S]*?```|`[^`\n]*`)/);
+}
+function linkInlineMentions(text, targets) {
+  const names = targets.flatMap((t) => t.names.filter(Boolean).map((name) => ({ id: t.id, name }))).sort((a, b) => b.name.length - a.name.length);
+  const segments = splitCode(text).map((segment, i) => {
+    if (i % 2 === 1)
+      return segment;
+    let out = "";
+    let rest = segment;
+    for (;; ) {
+      const at = rest.indexOf("@");
+      if (at === -1)
+        break;
+      const before = at === 0 ? "" : rest[at - 1];
+      const after = rest.slice(at + 1);
+      const boundary = before === "" || /[\s([{"'*_~>]/.test(before);
+      const hit = boundary ? names.find(({ name }) => {
+        if (after.slice(0, name.length).toLowerCase() !== name.toLowerCase())
+          return false;
+        const next = after[name.length];
+        return next === undefined || !/[\p{L}\p{N}_]/u.test(next);
+      }) : undefined;
+      if (hit) {
+        out += `${rest.slice(0, at)}<@${hit.id}>`;
+        rest = after.slice(hit.name.length);
+      } else {
+        out += rest.slice(0, at + 1);
+        rest = after;
+      }
+    }
+    return out + rest;
+  });
+  return segments.join("");
+}
+function mentionedIds(text) {
+  return [...new Set([...text.matchAll(RAW_MENTION)].map((m) => m[1]))];
+}
+function mayHaveInlineMention(text) {
+  return /(^|[\s([{"'*_~>])@(?!everyone\b|here\b)[^\s<]/.test(text);
+}
+
 function str(args, key) {
   const value = args[key];
   if (typeof value !== "string" || !value.trim())
@@ -892,14 +935,21 @@ async function prepareOutgoing(discord, message, mentionRefs, filePaths) {
   assertNoSecrets(message, "message");
   const files = loadUploads(filePaths);
   const mentionIds = await resolveMentions(discord, mentionRefs);
+  let body = message;
+  if (mayHaveInlineMention(body)) {
+    const members = await discord.members().catch(() => []);
+    const targets = members.map((m) => ({ id: m.user.id, names: [m.user.username, m.user.global_name ?? "", m.nick ?? ""] }));
+    body = linkInlineMentions(body, targets);
+  }
   const prefix = mentionIds.map((id) => `<@${id}>`).join(" ");
-  const split = splitMessage(prefix ? `${prefix} ${message}` : message);
+  const split = splitMessage(prefix ? `${prefix} ${body}` : body);
   if (split.overflow !== undefined) {
     if (files.length >= MAX_FILES)
       throw new RefusedError(`Message is long enough to need an attachment; send at most ${MAX_FILES - 1} files with it.`);
     files.unshift({ name: OVERFLOW_FILENAME, data: Buffer.from(split.overflow, "utf8"), contentType: "text/markdown" });
   }
-  return { content: split.content, files, allowedMentions: { parse: [], users: mentionIds, replied_user: true } };
+  const users = [...new Set([...mentionIds, ...mentionedIds(split.content)])];
+  return { content: split.content, files, allowedMentions: { parse: [], users, replied_user: true } };
 }
 function refuseStarboard(channel) {
   if (baseName(channel.name ?? "").toLowerCase() === STARBOARD_CHANNEL) {

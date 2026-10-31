@@ -26,6 +26,7 @@ import { configPath, statePath } from './config.ts';
 import { Discord, displayName, isThread, statusOf, withStatus, type Channel, type ResolvedChannel } from './discord.ts';
 import { MAX_FILES, RefusedError, loadUpload } from './files.ts';
 import { formatMessages, type FormatIo } from './format.ts';
+import { linkInlineMentions, mayHaveInlineMention, mentionedIds } from './mentions.ts';
 import { loadBotState, updateBotState } from './state.ts';
 import { directReason, type DirectReason } from './wake.ts';
 import type { ChannelTyping } from './typing.ts';
@@ -182,14 +183,23 @@ async function prepareOutgoing(discord: Discord, message: string, mentionRefs: s
   assertNoSecrets(message, 'message');
   const files = loadUploads(filePaths);
   const mentionIds = await resolveMentions(discord, mentionRefs);
+  let body = message;
+  if (mayHaveInlineMention(body)) {
+    // A failed member fetch (no Server Members intent) just leaves the text as written.
+    const members = await discord.members().catch(() => []);
+    const targets = members.map((m) => ({ id: m.user.id, names: [m.user.username, m.user.global_name ?? '', m.nick ?? ''] }));
+    body = linkInlineMentions(body, targets);
+  }
   const prefix = mentionIds.map((id) => `<@${id}>`).join(' ');
-  const split = splitMessage(prefix ? `${prefix} ${message}` : message);
+  const split = splitMessage(prefix ? `${prefix} ${body}` : body);
   if (split.overflow !== undefined) {
     if (files.length >= MAX_FILES) throw new RefusedError(`Message is long enough to need an attachment; send at most ${MAX_FILES - 1} files with it.`);
     files.unshift({ name: OVERFLOW_FILENAME, data: Buffer.from(split.overflow, 'utf8'), contentType: 'text/markdown' });
   }
-  // Only ping people the agent named on purpose; never @everyone or roles from pasted text.
-  return { content: split.content, files, allowedMentions: { parse: [], users: mentionIds, replied_user: true } };
+  // Ping exactly the users the message mentions (named on purpose, written as @Name, or <@id>);
+  // never @everyone or roles from pasted text.
+  const users = [...new Set([...mentionIds, ...mentionedIds(split.content)])];
+  return { content: split.content, files, allowedMentions: { parse: [], users, replied_user: true } };
 }
 
 function refuseStarboard(channel: Channel): void {
