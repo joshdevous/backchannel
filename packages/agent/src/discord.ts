@@ -249,6 +249,11 @@ export class Discord {
     await this.rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encodeURIComponent(emoji)));
   }
 
+  /** Shows "<bot> is typing…" in the channel for about 10 s. */
+  async typing(channelId: string): Promise<void> {
+    await this.rest.post(Routes.channelTyping(channelId));
+  }
+
   /** Needs the Server Members privileged intent enabled for this bot in the developer portal. */
   async members(): Promise<APIGuildMember[]> {
     const query = new URLSearchParams({ limit: '1000' });

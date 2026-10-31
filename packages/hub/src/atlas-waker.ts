@@ -6,6 +6,7 @@ import { firstBrief, followUp, type BriefContext } from './atlas-brief.ts';
 import type { AtlasChats } from './atlas-device.ts';
 import type { AtlasChat, AtlasStore } from './atlas-store.ts';
 import { log, logError } from './log.ts';
+import type { TurnState, TypingStarter } from './presence.ts';
 import { TIMED_OUT, withTimeout } from './timeout.ts';
 import type { WakeEvent, Waker } from './waker.ts';
 
@@ -14,6 +15,8 @@ export interface AtlasWakerOptions extends BriefContext {
   chats: AtlasChats;
   /** Working directory of every chat this opens. */
   cwd: string;
+  /** Shows "typing…" as the agent's bot while its Atlas turn is open. Optional. */
+  presence?: TypingStarter;
   now?: () => number;
   newRequestId?: () => string;
 }
@@ -99,6 +102,9 @@ export class AtlasWaker implements Waker {
       return;
     }
 
+    // Heard and about to act: show it at once, before the spawn or delivery takes its time.
+    this.#options.presence?.startTyping(event.channelId, () => this.#turnState(event.channelId));
+
     try {
       if (decision.kind === 'deliver') {
         const chat = store.chat(event.channelId)!;
@@ -117,6 +123,14 @@ export class AtlasWaker implements Waker {
     } catch (err) {
       logError(`atlas wake failed ${tag}`, err);
     }
+  }
+
+  /** Whether this channel's chat has a turn open right now, from the relay's session list. */
+  async #turnState(channelId: string): Promise<TurnState> {
+    const chat = this.#options.store.chat(channelId);
+    if (!chat) return 'unknown';
+    const run = await this.#options.chats.liveRun(chat.machineId, chat.acpSessionId);
+    return run?.turnOpen === true ? 'open' : 'closed';
   }
 
   /** One spawn attempt, settled in the store under its own request id whenever it finishes. */

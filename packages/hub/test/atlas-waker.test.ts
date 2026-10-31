@@ -1,7 +1,9 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
+import type { SessionInfo } from '@atlas/shared-types';
 import type { AtlasChats, DeliveryOutcome } from '../src/atlas-device.ts';
 import { AtlasStore, type AtlasChat } from '../src/atlas-store.ts';
+import type { TurnState } from '../src/presence.ts';
 import {
   AtlasWaker,
   decideWake,
@@ -34,6 +36,13 @@ class FakeChats implements AtlasChats {
     return 'prompted';
   }
 
+  /** Acp session ids whose run currently has an open turn. */
+  openTurns = new Set<string>();
+
+  async liveRun(machineId: string, acpSessionId: string): Promise<SessionInfo | undefined> {
+    return { sessionId: `run-${acpSessionId}`, machineId, turnOpen: this.openTurns.has(acpSessionId) } as SessionInfo;
+  }
+
   stop(): void {}
 }
 
@@ -55,16 +64,18 @@ function setup() {
   let ids = 0;
   const store = new AtlasStore(new Database(':memory:'));
   const chats = new FakeChats();
+  const typing: { channelId: string; probe: () => Promise<TurnState> }[] = [];
   const waker = new AtlasWaker({
     store,
     chats,
     cwd: '/root/chats',
     ownerId: 'owner',
     guildId: 'g',
+    presence: { startTyping: (channelId, probe) => void typing.push({ channelId, probe }) },
     now: () => clock,
     newRequestId: () => `req-${++ids}`,
   });
-  return { store, chats, waker, advance: (ms: number) => (clock += ms), now: () => clock };
+  return { store, chats, waker, typing, advance: (ms: number) => (clock += ms), now: () => clock };
 }
 
 test('first wake spawns a chat, maps the channel and sends the brief; the next one messages it', async () => {
@@ -171,4 +182,36 @@ test('spawns a previous process left pending are failed on start, but still coun
   expect(store.hasPendingSpawn('c1', 0)).toBe(false);
   await waker.wake(wakeEvent('c1'));
   expect(chats.spawns).toHaveLength(0);
+});
+
+test('a wake starts typing at once; its probe reads the chat\'s run once the chat is mapped', async () => {
+  const { chats, waker, typing } = setup();
+  await waker.wake(wakeEvent('c1', 'first'));
+  expect(typing.map((t) => t.channelId)).toEqual(['c1']);
+  // The spawn mapped the chat, so the probe now reads its run.
+  expect(await typing[0]!.probe()).toBe('closed');
+  chats.openTurns.add('acp-1');
+  expect(await typing[0]!.probe()).toBe('open');
+
+  await waker.wake(wakeEvent('c1', 'second'));
+  expect(typing.map((t) => t.channelId)).toEqual(['c1', 'c1']);
+});
+
+test('the typing probe is unknown while no chat is mapped', async () => {
+  const { waker, typing, chats } = setup();
+  chats.failSpawn = true;
+  await waker.wake(wakeEvent('c1'));
+  expect(typing).toHaveLength(1);
+  expect(await typing[0]!.probe()).toBe('unknown');
+});
+
+test('a dropped wake does not start typing', async () => {
+  const { waker, typing, advance } = setup();
+  for (let i = 0; i < MAX_WAKES_PER_HOUR; i++) {
+    await waker.wake(wakeEvent(`c${i}`));
+    advance(1);
+  }
+  expect(typing).toHaveLength(MAX_WAKES_PER_HOUR);
+  await waker.wake(wakeEvent('over'));
+  expect(typing).toHaveLength(MAX_WAKES_PER_HOUR);
 });

@@ -64,6 +64,7 @@ var STATUS_TAGS = [
   { name: "Done", emoji: "\u2705" }
 ];
 var STAR_EMOJI = "\u2B50";
+var ACK_EMOJI = "\uD83D\uDC40";
 var LOOP_LIMIT = 10;
 var NAME_SEPARATOR = "\u30FB";
 var GENERAL_CHANNEL = "general";
@@ -385,6 +386,9 @@ class Discord {
   async react(channelId, messageId, emoji) {
     await this.rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encodeURIComponent(emoji)));
   }
+  async typing(channelId) {
+    await this.rest.post(Routes.channelTyping(channelId));
+  }
   async members() {
     const query = new URLSearchParams({ limit: "1000" });
     return await this.rest.get(Routes.guildMembers(this.config.guildId), { query });
@@ -502,7 +506,7 @@ function wakeReason(input, meId, claimedPosts) {
 }
 
 var PUSH_CONTENT_MAX = 4000;
-async function startPush(server, config) {
+async function startPush(server, config, typing) {
   const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
   });
@@ -542,6 +546,10 @@ async function startPush(server, config) {
       if (thread)
         meta.post_title = thread.name;
       await server.notification({ method: "notifications/claude/channel", params: { content, meta } });
+      typing?.pushed(message.channelId);
+      await message.react(ACK_EMOJI).catch((error) => {
+        console.error(`[backchannel] push: could not react ${ACK_EMOJI}: ${error.message}`);
+      });
     } catch (error) {
       console.error(`[backchannel] push: failed to forward message: ${error.message}`);
     }
@@ -908,6 +916,7 @@ ${topic}`, "forum name or topic");
         });
       }
       rows.sort((a, b) => b.last_activity.localeCompare(a.last_activity));
+      ctx.typing?.activity(rows.map((r) => r.id));
       return json({ forum: { id: forum.id, name: baseName(forum.name ?? "") }, posts: rows });
     }
   },
@@ -950,6 +959,7 @@ ${topic}`, "forum name or topic");
     async run(args, ctx) {
       const discord = ctx.discord();
       const { channel } = await discord.resolveChannel(str(args, "channel"));
+      ctx.typing?.activity([channel.id]);
       const raw = await discord.messages(channel.id, { limit: optInt(args, "limit", 30, 1, 100), before: optStr(args, "before") });
       const messages = await formatMessages([...raw].reverse(), discord.config.ownerId);
       return json({ channel: { id: channel.id, name: baseName(channel.name ?? "") }, messages });
@@ -983,6 +993,7 @@ ${topic}`, "forum name or topic");
         allowed_mentions: out.allowedMentions,
         message_reference: replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined
       }, out.files);
+      ctx.typing?.answered(channel.id);
       return `Posted (message ${sent.id}) in ${baseName(channel.name ?? channel.id)}: ${link(discord.config.guildId, channel.id, sent.id)}`;
     }
   },
@@ -1024,6 +1035,7 @@ ${topic}`, "forum name or topic");
       const shown = hits.slice(-MESSAGE_CAP);
       const formatted = await formatMessages(shown.map((h) => h.message), discord.config.ownerId);
       updateBotState(me.id, (s) => void (s.inboxCursor = nextCursor));
+      ctx.typing?.activity(shown.map((h) => h.channel.id));
       return json({
         since: snowflakeToDate(cursor).toISOString(),
         messages: formatted.map((m, i) => ({
@@ -1079,7 +1091,9 @@ ${topic}`, "forum name or topic");
     },
     async run(args, ctx) {
       const discord = ctx.discord();
-      return claimPost(discord, await discord.resolveChannel(str(args, "post")), optStr(args, "note"));
+      const resolved = await discord.resolveChannel(str(args, "post"));
+      ctx.typing?.activity([resolved.channel.id]);
+      return claimPost(discord, resolved, optStr(args, "note"));
     }
   },
   {
@@ -1098,6 +1112,7 @@ ${topic}`, "forum name or topic");
       const discord = ctx.discord();
       const status = statusArg(str(args, "status"));
       const resolved = await discord.resolveChannel(str(args, "post"));
+      ctx.typing?.activity([resolved.channel.id]);
       const note = optStr(args, "note");
       if (status === "Claimed")
         return claimPost(discord, resolved, note);
@@ -1154,10 +1169,107 @@ ${topic}`, "forum name or topic");
       const out = await prepareOutgoing(discord, optStr(args, "message") ?? "", [], [str(args, "path")]);
       await assertNotLooping(discord, channel.id);
       const sent = await discord.send(channel.id, { content: out.content, allowed_mentions: out.allowedMentions }, out.files);
+      ctx.typing?.answered(channel.id);
       return `Shared ${out.files.map((f) => f.name).join(", ")} (message ${sent.id}): ${link(discord.config.guildId, channel.id, sent.id)}`;
     }
   }
 ];
+
+var PUSH_WINDOW_MS = 10 * 60000;
+var TYPING_IDLE_MS = 3 * 60000;
+var TYPING_REFRESH_MS = 8000;
+
+class TypingTracker {
+  #pushed = new Map;
+  #active = new Map;
+  pushed(channelId, now) {
+    this.#pushed.set(channelId, now);
+  }
+  answered(channelId) {
+    this.#pushed.delete(channelId);
+    this.#active.delete(channelId);
+  }
+  activity(now, channelIds = []) {
+    this.#expire(now);
+    for (const channelId of this.#active.keys())
+      this.#active.set(channelId, now);
+    const started = [];
+    for (const channelId of channelIds) {
+      if (this.#active.has(channelId) || !this.#pushed.has(channelId))
+        continue;
+      this.#active.set(channelId, now);
+      started.push(channelId);
+    }
+    return started;
+  }
+  tick(now) {
+    this.#expire(now);
+    return [...this.#active.keys()];
+  }
+  get hasActive() {
+    return this.#active.size > 0;
+  }
+  #expire(now) {
+    for (const [channelId, at] of this.#pushed)
+      if (now - at >= PUSH_WINDOW_MS)
+        this.#pushed.delete(channelId);
+    for (const [channelId, at] of this.#active)
+      if (now - at >= TYPING_IDLE_MS)
+        this.#active.delete(channelId);
+  }
+}
+var realTimers = {
+  set: (fn, ms) => {
+    const handle = setTimeout(fn, ms);
+    handle.unref?.();
+    return handle;
+  },
+  clear: (handle) => clearTimeout(handle),
+  now: () => Date.now()
+};
+
+class TypingLoop {
+  send;
+  timers;
+  #tracker = new TypingTracker;
+  #handle;
+  constructor(send, timers = realTimers) {
+    this.send = send;
+    this.timers = timers;
+  }
+  pushed(channelId) {
+    this.#tracker.pushed(channelId, this.timers.now());
+  }
+  answered(channelId) {
+    this.#tracker.answered(channelId);
+    this.#settle();
+  }
+  activity(channelIds = []) {
+    for (const channelId of this.#tracker.activity(this.timers.now(), channelIds))
+      this.#type(channelId);
+    this.#settle();
+  }
+  #tick() {
+    this.#handle = undefined;
+    for (const channelId of this.#tracker.tick(this.timers.now()))
+      this.#type(channelId);
+    this.#settle();
+  }
+  #settle() {
+    const needed = this.#tracker.hasActive;
+    if (needed && this.#handle === undefined)
+      this.#handle = this.timers.set(() => this.#tick(), TYPING_REFRESH_MS);
+    else if (!needed && this.#handle !== undefined) {
+      this.timers.clear(this.#handle);
+      this.#handle = undefined;
+    }
+  }
+  #type(channelId) {
+    (async () => this.send(channelId))().catch((error) => {
+      console.error(`[backchannel] typing indicator failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+}
 
 var VERSION = "0.1.0";
 var push = process.argv.includes("--push") || process.env.BACKCHANNEL_PUSH === "1";
@@ -1183,6 +1295,7 @@ function getDiscord() {
   discord ??= new Discord(requireConfig(loadConfig()));
   return discord;
 }
+var typing = new TypingLoop((channelId) => getDiscord().typing(channelId));
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))
 }));
@@ -1190,7 +1303,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const tool = TOOLS.find((t) => t.name === request.params.name);
   if (!tool)
     return { content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }], isError: true };
-  const ctx = { discord: getDiscord, signal: extra.signal };
+  typing.activity();
+  const ctx = { discord: getDiscord, signal: extra.signal, typing };
   try {
     const text = await tool.run(request.params.arguments ?? {}, ctx);
     return { content: [{ type: "text", text }] };
@@ -1215,7 +1329,7 @@ if (push) {
   }
   const missing = config ? missingFields(config) : ["config"];
   if (config && missing.length === 0)
-    startPush(server, requireConfig(config));
+    startPush(server, requireConfig(config), typing);
   else
     console.error(`[backchannel] push mode off: config is missing ${missing.join(", ")}. Run the Backchannel setup, then restart.`);
 }

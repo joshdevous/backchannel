@@ -78,6 +78,50 @@ export function loadAtlasWakeConfig(env: Record<string, string | undefined>): At
   };
 }
 
+/** The bot user id a Discord bot token belongs to: its first dot-separated part, base64. */
+export function botIdFromToken(token: string): string | undefined {
+  const first = token.split('.')[0];
+  if (!first) return undefined;
+  const id = Buffer.from(first, 'base64').toString('utf8');
+  return /^\d{17,20}$/.test(id) ? id : undefined;
+}
+
+export type AgentTokenResult = { token: string; source: string } | { token?: undefined; why: string };
+
+/**
+ * The agent bot's token, used to react and type as that bot. `ATLAS_AGENT_TOKEN` wins; else the
+ * `token` in the agent config file (`BACKCHANNEL_CONFIG`, default `~/.backchannel/config.json`),
+ * but only when that file is for this guild. Either way the token must belong to `botId`, so a
+ * wrong file can never make the hub act as some other bot. Never returns a reason that holds
+ * the token.
+ */
+export function loadAgentToken(
+  env: Record<string, string | undefined>,
+  guildId: string,
+  botId: string,
+  readConfigFile: (path: string) => string | undefined,
+  home: string,
+): AgentTokenResult {
+  const check = (token: string, source: string): AgentTokenResult =>
+    botIdFromToken(token) === botId ? { token, source } : { why: `${source} is not the token of bot ${botId}` };
+
+  const fromEnv = env.ATLAS_AGENT_TOKEN?.trim();
+  if (fromEnv) return check(fromEnv, 'ATLAS_AGENT_TOKEN');
+
+  const path = env.BACKCHANNEL_CONFIG?.trim() || `${home}/.backchannel/config.json`;
+  const raw = readConfigFile(path);
+  if (raw === undefined) return { why: `ATLAS_AGENT_TOKEN unset and ${path} not readable` };
+  let parsed: { token?: unknown; guildId?: unknown };
+  try {
+    parsed = JSON.parse(raw) as typeof parsed;
+  } catch {
+    return { why: `${path} is not valid JSON` };
+  }
+  if (typeof parsed.token !== 'string' || !parsed.token.trim()) return { why: `${path} has no token` };
+  if (parsed.guildId !== guildId) return { why: `${path} is for a different guild` };
+  return check(parsed.token.trim(), path);
+}
+
 /**
  * Category new forums go in. `FORUM_CATEGORY` lets a server keep its own layout (Claude Central
  * uses `work`); without it the hub uses `Projects`.

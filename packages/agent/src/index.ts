@@ -12,6 +12,7 @@ import { Discord } from './discord.ts';
 import { RefusedError } from './files.ts';
 import { startPush } from './push.ts';
 import { TOOLS, type ToolContext } from './tools.ts';
+import { TypingLoop } from './typing.ts';
 
 const VERSION = '0.1.0';
 
@@ -51,6 +52,9 @@ function getDiscord(): Discord {
   return discord;
 }
 
+// Typing indicator for messages pushed to this agent; idle (no timer, no calls) until one arrives.
+const typing = new TypingLoop((channelId) => getDiscord().typing(channelId));
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
 }));
@@ -58,7 +62,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const tool = TOOLS.find((t) => t.name === request.params.name);
   if (!tool) return { content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }], isError: true };
-  const ctx: ToolContext = { discord: getDiscord, signal: extra.signal };
+  typing.activity(); // any tool call shows the agent is still at work
+  const ctx: ToolContext = { discord: getDiscord, signal: extra.signal, typing };
   try {
     const text = await tool.run(request.params.arguments ?? {}, ctx);
     return { content: [{ type: 'text', text }] };
@@ -82,6 +87,6 @@ if (push) {
     console.error(`[backchannel] ${(error as Error).message}`);
   }
   const missing = config ? missingFields(config) : ['config'];
-  if (config && missing.length === 0) void startPush(server, requireConfig(config));
+  if (config && missing.length === 0) void startPush(server, requireConfig(config), typing);
   else console.error(`[backchannel] push mode off: config is missing ${missing.join(', ')}. Run the Backchannel setup, then restart.`);
 }

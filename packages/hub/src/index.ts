@@ -1,11 +1,14 @@
 import type { Database } from 'bun:sqlite';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { AtlasDevice } from './atlas-device.ts';
 import { AtlasStore } from './atlas-store.ts';
 import { AtlasWaker } from './atlas-waker.ts';
-import { loadAtlasWakeConfig, loadConfig } from './config.ts';
+import { loadAgentToken, loadAtlasWakeConfig, loadConfig } from './config.ts';
 import { openDb } from './db.ts';
 import { startHub } from './hub.ts';
 import { log, logError } from './log.ts';
+import { AgentPresence, createAgentBotApi } from './presence.ts';
 
 try {
   const config = loadConfig();
@@ -13,22 +16,33 @@ try {
   // Josh's agent is an Atlas chat; the hub reaches it as an Atlas device over the relay.
   let waker: AtlasWaker | undefined;
   let wakeDb: Database | undefined;
+  let presence: AgentPresence | undefined;
   if (config.atlasAgentBotId) {
     const atlas = loadAtlasWakeConfig(process.env);
     const device = new AtlasDevice(atlas);
     device.start();
     wakeDb = openDb(config.dbPath);
+    // The agent bot's own token lets the hub react and type as that bot; without it wakes
+    // still work, just silently.
+    const agentToken = loadAgentToken(process.env, config.guildId, config.atlasAgentBotId, readConfigFile, homedir());
+    if (agentToken.token === undefined) {
+      log(`agent presence off: ${agentToken.why}`);
+    } else {
+      presence = new AgentPresence(createAgentBotApi(agentToken.token));
+      log(`agent presence on (👀 + typing as bot ${config.atlasAgentBotId}), token from ${agentToken.source}`);
+    }
     waker = new AtlasWaker({
       store: new AtlasStore(wakeDb),
       chats: device,
       cwd: atlas.cwd,
       ownerId: atlas.ownerId,
       guildId: config.guildId,
+      presence,
     });
     log(`atlas wake-ups on: device ${atlas.deviceId}, machine ${atlas.machineId}, cwd ${atlas.cwd}`);
   }
 
-  const hub = await startHub({ config, waker });
+  const hub = await startHub({ config, waker, presence });
 
   let stopping = false;
   const shutdown = (signal: string) => {
@@ -40,6 +54,7 @@ try {
       .stop()
       .then(() => {
         waker?.stop();
+        presence?.stop();
         wakeDb?.close();
       })
       .then(
@@ -55,4 +70,12 @@ try {
 } catch (err) {
   logError('hub failed to start', err);
   process.exit(1);
+}
+
+function readConfigFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return undefined;
+  }
 }

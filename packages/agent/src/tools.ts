@@ -28,6 +28,7 @@ import { MAX_FILES, RefusedError, loadUpload } from './files.ts';
 import { formatMessages } from './format.ts';
 import { loadBotState, updateBotState } from './state.ts';
 import { wakeReason, type WakeReason } from './wake.ts';
+import type { ChannelTyping } from './typing.ts';
 
 type Args = Record<string, unknown>;
 
@@ -36,6 +37,8 @@ export interface ToolContext {
   discord(): Discord;
   /** Aborted when the MCP client cancels the call. */
   signal?: AbortSignal;
+  /** Typing indicator bookkeeping; absent in tests. */
+  typing?: ChannelTyping;
 }
 
 export interface ToolDefinition {
@@ -363,6 +366,7 @@ export const TOOLS: ToolDefinition[] = [
         });
       }
       rows.sort((a, b) => b.last_activity.localeCompare(a.last_activity));
+      ctx.typing?.activity(rows.map((r) => r.id));
       return json({ forum: { id: forum.id, name: baseName(forum.name ?? '') }, posts: rows });
     },
   },
@@ -410,6 +414,7 @@ export const TOOLS: ToolDefinition[] = [
     async run(args, ctx) {
       const discord = ctx.discord();
       const { channel } = await discord.resolveChannel(str(args, 'channel'));
+      ctx.typing?.activity([channel.id]);
       const raw = await discord.messages(channel.id, { limit: optInt(args, 'limit', 30, 1, 100), before: optStr(args, 'before') });
       const messages = await formatMessages([...raw].reverse(), discord.config.ownerId);
       return json({ channel: { id: channel.id, name: baseName(channel.name ?? '') }, messages });
@@ -447,6 +452,7 @@ export const TOOLS: ToolDefinition[] = [
         },
         out.files,
       );
+      ctx.typing?.answered(channel.id);
       return `Posted (message ${sent.id}) in ${baseName(channel.name ?? channel.id)}: ${link(discord.config.guildId, channel.id, sent.id)}`;
     },
   },
@@ -496,6 +502,7 @@ export const TOOLS: ToolDefinition[] = [
       const shown = hits.slice(-MESSAGE_CAP);
       const formatted = await formatMessages(shown.map((h) => h.message), discord.config.ownerId);
       updateBotState(me.id, (s) => void (s.inboxCursor = nextCursor));
+      ctx.typing?.activity(shown.map((h) => h.channel.id));
       return json({
         since: snowflakeToDate(cursor).toISOString(),
         messages: formatted.map((m, i) => ({
@@ -553,7 +560,9 @@ export const TOOLS: ToolDefinition[] = [
     },
     async run(args, ctx) {
       const discord = ctx.discord();
-      return claimPost(discord, await discord.resolveChannel(str(args, 'post')), optStr(args, 'note'));
+      const resolved = await discord.resolveChannel(str(args, 'post'));
+      ctx.typing?.activity([resolved.channel.id]);
+      return claimPost(discord, resolved, optStr(args, 'note'));
     },
   },
   {
@@ -572,6 +581,7 @@ export const TOOLS: ToolDefinition[] = [
       const discord = ctx.discord();
       const status = statusArg(str(args, 'status'));
       const resolved = await discord.resolveChannel(str(args, 'post'));
+      ctx.typing?.activity([resolved.channel.id]);
       const note = optStr(args, 'note');
       if (status === 'Claimed') return claimPost(discord, resolved, note);
 
@@ -627,6 +637,7 @@ export const TOOLS: ToolDefinition[] = [
       const out = await prepareOutgoing(discord, optStr(args, 'message') ?? '', [], [str(args, 'path')]);
       await assertNotLooping(discord, channel.id);
       const sent = await discord.send(channel.id, { content: out.content, allowed_mentions: out.allowedMentions }, out.files);
+      ctx.typing?.answered(channel.id);
       return `Shared ${out.files.map((f) => f.name).join(', ')} (message ${sent.id}): ${link(discord.config.guildId, channel.id, sent.id)}`;
     },
   },

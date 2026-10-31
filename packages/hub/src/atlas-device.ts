@@ -50,6 +50,8 @@ export interface AtlasChats {
   spawn(cwd: string, requestId: string): Promise<Omit<AtlasChat, 'channelId'>>;
   /** Hands `text` to an existing chat: steer into a live turn, else prompt (resuming if closed). */
   deliver(chat: Omit<AtlasChat, 'channelId'>, text: string): Promise<DeliveryOutcome>;
+  /** The live run holding this conversation, from the relay's session list; `undefined` when none. */
+  liveRun(machineId: MachineId, acpSessionId: string): Promise<SessionInfo | undefined>;
   stop(): void;
 }
 

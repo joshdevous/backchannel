@@ -84,6 +84,12 @@ replies to it and new messages in posts it started or claimed show up in your se
 preview and only Anthropic's own channel plugins are allowlisted. Without the flag, the tools
 still work but nothing is pushed: use `inbox` or `wait_for_reply` instead.
 
+When an event arrives your bot reacts 👀 to that message, so the sender knows you got it. Once
+your agent starts working on it (its first `read`, `claim`, `set_status`, `list_posts` or
+`inbox` call covering that channel) the bot shows "typing…" there until the agent posts in the
+channel or goes 3 minutes without a tool call. The bot needs Add Reactions, which the **Agent**
+role grants.
+
 ## 2b. Install in other MCP agents (omp, Cursor, …)
 
 Backchannel is a plain stdio MCP server, so any MCP client can run it.

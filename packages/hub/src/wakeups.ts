@@ -2,8 +2,12 @@ import { AGENT_ROLE, isClaimMarker, isReleaseMarker, resolveClaim } from '@backc
 import { ChannelType, type Client, type Message, type ThreadChannel } from 'discord.js';
 import { log, logError } from './log.ts';
 import type { AuthorKind, WakeEvent, WakeMessage, WakeReason, Waker } from './waker.ts';
+import type { WakePresence } from './presence.ts';
 
-export const WAKE_DEBOUNCE_MS = 20_000;
+/** A batch is sent this long after the last message in its channel... */
+export const WAKE_QUIET_MS = 1_500;
+/** ...but never later than this after the first, so a chatty post cannot postpone it forever. */
+export const WAKE_MAX_MS = 5_000;
 
 /** Higher wins when several messages in one batch have different reasons. */
 const REASON_STRENGTH: Record<WakeReason, number> = {
@@ -63,34 +67,48 @@ export function mergeWakeMessages(
 export interface Scheduler {
   set(fn: () => void, ms: number): unknown;
   clear(handle: unknown): void;
+  now(): number;
 }
 
 const realScheduler: Scheduler = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  now: () => Date.now(),
 };
 
 /**
- * Collects items per key and flushes them together `windowMs` after the first one arrived.
- * A fixed window (not a sliding one) so a chatty post cannot postpone the wake forever.
+ * How long to wait after an item arrives: `quietMs` from now, but not past `maxMs` after the
+ * first item of the batch. Pure; the Debouncer reschedules with it on every item.
+ */
+export function debounceDelay(firstAt: number, now: number, quietMs: number, maxMs: number): number {
+  return Math.max(0, Math.min(quietMs, firstAt + maxMs - now));
+}
+
+/**
+ * Collects items per key and flushes them together once the key has been quiet for `quietMs`
+ * (a trailing debounce), or `maxMs` after its first item at the latest.
  */
 export class Debouncer<T> {
-  private readonly pending = new Map<string, { items: T[]; handle: unknown }>();
+  private readonly pending = new Map<string, { items: T[]; firstAt: number; handle: unknown }>();
 
   constructor(
-    private readonly windowMs: number,
+    private readonly quietMs: number,
+    private readonly maxMs: number,
     private readonly onFlush: (key: string, items: T[]) => Promise<void> | void,
     private readonly scheduler: Scheduler = realScheduler,
   ) {}
 
   add(key: string, item: T): void {
+    const now = this.scheduler.now();
     const entry = this.pending.get(key);
     if (entry) {
       entry.items.push(item);
+      this.scheduler.clear(entry.handle);
+      entry.handle = this.scheduler.set(() => void this.flush(key), debounceDelay(entry.firstAt, now, this.quietMs, this.maxMs));
       return;
     }
-    const handle = this.scheduler.set(() => void this.flush(key), this.windowMs);
-    this.pending.set(key, { items: [item], handle });
+    const handle = this.scheduler.set(() => void this.flush(key), debounceDelay(now, now, this.quietMs, this.maxMs));
+    this.pending.set(key, { items: [item], firstAt: now, handle });
   }
 
   async flush(key: string): Promise<void> {
@@ -140,13 +158,21 @@ export interface WakeDetector {
   flush(): Promise<void>;
 }
 
-/** Hooks MessageCreate/MessageDelete and forwards debounced wake events to `waker`. */
-export function startWakeDetection(client: Client<true>, targetId: string, waker: Waker): WakeDetector {
+/**
+ * Hooks MessageCreate/MessageDelete and forwards debounced wake events to `waker`. `presence`
+ * (optional) reacts to each triggering message at once and hears when the agent speaks.
+ */
+export function startWakeDetection(
+  client: Client<true>,
+  targetId: string,
+  waker: Waker,
+  presence?: WakePresence,
+): WakeDetector {
   const claimants = new ClaimantCache();
   const meta = new Map<string, { postTitle?: string; forumName?: string }>();
   const hubId = client.user.id;
 
-  const debouncer = new Debouncer<WakeMessage>(WAKE_DEBOUNCE_MS, async (channelId, messages) => {
+  const debouncer = new Debouncer<WakeMessage>(WAKE_QUIET_MS, WAKE_MAX_MS, async (channelId, messages) => {
     const event = mergeWakeMessages(channelId, meta.get(channelId) ?? {}, messages);
     meta.delete(channelId);
     try {
@@ -165,6 +191,7 @@ export function startWakeDetection(client: Client<true>, targetId: string, waker
   client.on('messageCreate', async (message) => {
     try {
       if (!message.inGuild()) return;
+      if (message.author.id === targetId) presence?.agentPosted(message.channelId);
       if (message.author.id === targetId || message.author.id === hubId) return;
 
       const channel = message.channel;
@@ -201,6 +228,7 @@ export function startWakeDetection(client: Client<true>, targetId: string, waker
         jumpUrl: message.url,
       };
       if (thread) meta.set(thread.id, { postTitle: thread.name, forumName: thread.parent?.name });
+      presence?.ack(message.channelId, message.id);
       debouncer.add(message.channelId, entry);
       log(`wake queued channel=${message.channelId} message=${message.id} reason=${reason}`);
     } catch (err) {

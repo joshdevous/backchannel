@@ -15,8 +15,9 @@ export interface WakeMessage {
 
 /**
  * What the hub hands a Waker. The top-level fields describe the newest message in the batch
- * (`reason` is the strongest reason in the batch); `messages` has every message in the 20 s
- * debounce window, oldest first, newest last (always at least one).
+ * (`reason` is the strongest reason in the batch); `messages` has every message collected by
+ * the debounce (1.5 s after the last, 5 s after the first at the latest), oldest first, newest
+ * last (always at least one).
  */
 export interface WakeEvent extends WakeMessage {
   channelId: string;

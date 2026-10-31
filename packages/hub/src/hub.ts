@@ -9,6 +9,7 @@ import { startRoleLabels } from './roles.ts';
 import { ensureStructure } from './setup.ts';
 import { startStarboard } from './starboard.ts';
 import { ensureAllForums, startTagWatchers } from './tags.ts';
+import type { WakePresence } from './presence.ts';
 import type { Waker } from './waker.ts';
 import { startWakeDetection, type WakeDetector } from './wakeups.ts';
 
@@ -16,6 +17,8 @@ export interface HubOptions {
   config: HubConfig;
   /** Receives wake-ups aimed at ATLAS_AGENT_BOT_ID. Detection is off without it. */
   waker?: Waker;
+  /** Reacts to messages that wake the agent, and hears when the agent speaks. Optional. */
+  presence?: WakePresence;
 }
 
 export interface Hub {
@@ -34,7 +37,7 @@ export const HUB_INTENTS = [
   GatewayIntentBits.MessageContent,
 ];
 
-export async function startHub({ config, waker }: HubOptions): Promise<Hub> {
+export async function startHub({ config, waker, presence }: HubOptions): Promise<Hub> {
   const db = openDb(config.dbPath);
   const client = new Client({
     intents: HUB_INTENTS,
@@ -59,7 +62,7 @@ export async function startHub({ config, waker }: HubOptions): Promise<Hub> {
 
   let wakes: WakeDetector | undefined;
   if (config.atlasAgentBotId && waker) {
-    wakes = startWakeDetection(live, config.atlasAgentBotId, waker);
+    wakes = startWakeDetection(live, config.atlasAgentBotId, waker, presence);
     log(`wake-up detection on for bot ${config.atlasAgentBotId}`);
   } else {
     log('wake-up detection off');

@@ -89,6 +89,26 @@ message goes on the starboard once. Messages in `#starboard` itself are ignored.
   steer into a live turn, else prompt (attaching to an open run, resuming a closed one – never a
   second resume of an open run). Limits: one spawn per channel per 10 min, 20 wakes per hour.
   `packages/hub/scripts/wake-test.ts` drives the same code by hand (`probe`, `spawn`, `message`).
+- **Debounce.** The hub collects the messages that wake the agent per channel and sends them as
+  one wake `WAKE_QUIET_MS` (1.5 s) after the last message in that channel, but never later than
+  `WAKE_MAX_MS` (5 s) after the first (a trailing debounce with a ceiling, `wakeups.ts`). The
+  rest of the spawn → prompt path has no deliberate wait: it needs one machine-list and one
+  session-list round trip, then the prompt goes out.
+
+### Acknowledged and working indicators
+
+Both are shown as the **agent's own bot**, so they read as the agent, not the hub.
+
+| Indicator | Meaning | Atlas agent (hub acts as the agent bot) | Other agents (agent MCP server) |
+|---|---|---|---|
+| 👀 reaction on the message (`ACK_EMOJI`) | the agent got it | the moment the hub sees a message that will wake the agent, before the debounce | right after the channel event is written to the session (push mode) |
+| "typing…" in the channel | the agent is working on an answer | from the moment the wake fires: refreshed every 8 s while the Atlas run's turn is open (polled from the relay session list); stops when the turn closes, when the agent bot posts there, if no turn shows up within 60 s, or after 10 min | starts at the first `read`/`claim`/`set_status`/`list_posts`/`inbox` call covering a channel that had an unanswered push event in the last 10 min; refreshed every 8 s; stops when the agent `post`s or `share_file`s there, or after 3 min without any tool call |
+
+The hub needs the agent bot's token for this: `ATLAS_AGENT_TOKEN`, else `token` from the agent
+config file (`BACKCHANNEL_CONFIG` or `~/.backchannel/config.json`) when that file's `guildId`
+matches the hub's. Either way the token must belong to `ATLAS_AGENT_BOT_ID`. With no usable
+token the hub logs `agent presence off` and wakes still work, silently. Reaction and typing
+failures are logged and ignored.
 
 ## Config
 
@@ -99,7 +119,8 @@ env vars override each field:
 { "token": "...", "guildId": "...", "ownerId": "...", "agentName": "..." }
 ```
 
-Hub reads env: `DISCORD_TOKEN`, `GUILD_ID`, `DB_PATH`, `ATLAS_AGENT_BOT_ID`. With
+Hub reads env: `DISCORD_TOKEN`, `GUILD_ID`, `DB_PATH`, `ATLAS_AGENT_BOT_ID`, and optionally
+`ATLAS_AGENT_TOKEN` (see above). With
 `ATLAS_AGENT_BOT_ID` set it also needs `BACKCHANNEL_OWNER_ID` and `CF_ACCESS_CLIENT_ID` /
 `CF_ACCESS_CLIENT_SECRET` (the service unit loads `/root/.config/atlas-agent-access`), and reads
 `ATLAS_URL` (the Atlas web origin, required), and optional `ATLAS_WAKE_MACHINE` (`atlas-vps`),

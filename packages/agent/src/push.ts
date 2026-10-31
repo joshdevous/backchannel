@@ -1,8 +1,9 @@
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { Client, Events, GatewayIntentBits } from 'discord.js';
-import { classifyAuthor } from '@backchannel/core';
+import { ACK_EMOJI, classifyAuthor } from '@backchannel/core';
 import type { CompleteConfig } from './config.ts';
 import { loadBotState } from './state.ts';
+import type { TypingLoop } from './typing.ts';
 import { wakeReason } from './wake.ts';
 
 /** Longest channel event body; anything longer is cut and the agent is told to `read` the rest. */
@@ -13,7 +14,7 @@ const PUSH_CONTENT_MAX = 4000;
  * Claude Code channel events (`notifications/claude/channel`). Only messages from the configured
  * server get through; meta carries identifiers and `from_kind` so authority is always visible.
  */
-export async function startPush(server: Server, config: CompleteConfig): Promise<void> {
+export async function startPush(server: Server, config: CompleteConfig, typing?: TypingLoop): Promise<void> {
   const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   });
@@ -57,6 +58,12 @@ export async function startPush(server: Server, config: CompleteConfig): Promise
       if (thread) meta.post_title = thread.name;
 
       await server.notification({ method: 'notifications/claude/channel', params: { content, meta } });
+
+      // The agent has the message: tell the channel (👀), and owe it an answer (typing starts with the next tool call).
+      typing?.pushed(message.channelId);
+      await message.react(ACK_EMOJI).catch((error: Error) => {
+        console.error(`[backchannel] push: could not react ${ACK_EMOJI}: ${error.message}`);
+      });
     } catch (error) {
       console.error(`[backchannel] push: failed to forward message: ${(error as Error).message}`);
     }
