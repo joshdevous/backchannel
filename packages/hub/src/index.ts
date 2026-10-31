@@ -8,6 +8,7 @@ import { loadAgentToken, loadAtlasWakeConfig, loadConfig } from './config.ts';
 import { openDb } from './db.ts';
 import { startHub } from './hub.ts';
 import { log, logError } from './log.ts';
+import { keepAgentOnline } from './agent-online.ts';
 import { AgentPresence, createAgentBotApi } from './presence.ts';
 
 try {
@@ -17,6 +18,7 @@ try {
   let waker: AtlasWaker | undefined;
   let wakeDb: Database | undefined;
   let presence: AgentPresence | undefined;
+  let agentOnline: { stop(): Promise<void> } | undefined;
   if (config.atlasAgentBotId) {
     const atlas = loadAtlasWakeConfig(process.env);
     const device = new AtlasDevice(atlas);
@@ -30,6 +32,10 @@ try {
     } else {
       presence = new AgentPresence(createAgentBotApi(agentToken.token));
       log(`agent presence on (👀 + typing as bot ${config.atlasAgentBotId}), token from ${agentToken.source}`);
+      agentOnline = await keepAgentOnline(agentToken.token).catch((err) => {
+        logError('agent bot could not go online', err);
+        return undefined;
+      });
     }
     waker = new AtlasWaker({
       store: new AtlasStore(wakeDb),
@@ -56,6 +62,7 @@ try {
         waker?.stop();
         presence?.stop();
         wakeDb?.close();
+        return agentOnline?.stop();
       })
       .then(
         () => process.exit(0),
