@@ -1,7 +1,8 @@
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import type { SessionInfo } from '@atlas/shared-types';
-import type { AtlasChats, DeliveryOutcome } from '../src/atlas-device.ts';
+import type { AtlasChats, Delivery } from '../src/atlas-device.ts';
+import { SPLIT_NOTE } from '../src/atlas-brief.ts';
 import type { AtlasProject } from '../src/atlas-projects.ts';
 import { AtlasStore, UNFILED, type AtlasChat, type ChatTarget } from '../src/atlas-store.ts';
 import type { TurnState } from '../src/presence.ts';
@@ -24,6 +25,8 @@ const ATLAS: AtlasProject = { id: 'p-atlas', name: 'Atlas', description: '', che
 class FakeProjects implements ProjectRouting {
   /** What the next classification returns; `undefined` is "no project list". */
   next: AtlasProject | undefined = BACKCHANNEL;
+  /** When set, picks the project from the batch's last message instead of `next`. */
+  pick: ((content: string) => AtlasProject) | undefined;
   calls: ClassifyInput[] = [];
   filed: { projectId: string; conversationId: string }[] = [];
   failFile = false;
@@ -31,7 +34,8 @@ class FakeProjects implements ProjectRouting {
   async classify(input: ClassifyInput): Promise<Classification> {
     this.calls.push(input);
     await Promise.resolve();
-    return { project: this.next, name: this.next?.name ?? 'Backchannel', ms: 7 };
+    const project = this.pick ? this.pick(input.messages.at(-1)!.content) : this.next;
+    return { project, name: project?.name ?? 'Backchannel', ms: 7 };
   }
 
   async file(projectId: string, conversationId: string): Promise<void> {
@@ -46,20 +50,23 @@ class FakeChats implements AtlasChats {
   deliveries: { acpSessionId: string; text: string }[] = [];
   failSpawn = false;
   failDeliver = false;
+  /** While set, spawns in this cwd wait for `until`. */
+  holdSpawns: { cwd: string; until: Promise<void> } | undefined;
   #next = 0;
 
   async spawn(cwd: string, requestId: string): Promise<Target> {
     this.spawns.push(requestId);
     await Promise.resolve(); // settle asynchronously, so concurrent wakes can interleave
+    if (this.holdSpawns?.cwd === cwd) await this.holdSpawns.until;
     if (this.failSpawn) throw new Error('machine said no');
     return { acpSessionId: `acp-${++this.#next}`, machineId: 'atlas-vps', cwd };
   }
 
-  async deliver(chat: Target, text: string): Promise<DeliveryOutcome> {
+  async deliver(chat: Target, text: string): Promise<Delivery> {
     await Promise.resolve();
     if (this.failDeliver) throw new Error('prompt refused');
     this.deliveries.push({ acpSessionId: chat.acpSessionId, text });
-    return 'prompted';
+    return { accepted: Promise.resolve('prompted') };
   }
 
   /** Acp session ids whose run currently has an open turn. */
@@ -396,4 +403,47 @@ test('the store moves chats keyed by channel alone to the (channel, project) key
   expect(store.lastSpawnAt('post1', UNFILED)).toBe(1);
   // Opening the store again leaves the migrated table alone.
   expect(new AtlasStore(db).chat('post1')?.acpSessionId).toBe('acp-old');
+});
+
+test("a mention about one project is not held up by another project's spawn in the same channel", async () => {
+  const { store, chats, projects, waker } = setup();
+  projects.pick = (content) => (content.includes('generator') ? RPAI : ATLAS);
+  const release = Promise.withResolvers<void>();
+  // The Atlas chat opens in its checkout; its spawn hangs until released.
+  chats.holdSpawns = { cwd: '/root/projects/atlas', until: release.promise };
+  const ambient = waker.wake({ ...generalEvent('general', "what's everyone up to"), reason: 'ambient' });
+  await waker.wake(generalEvent('general', "@agent how's the generator doing?"));
+
+  expect(store.chat('general', 'p-rpai')?.acpSessionId).toBe('acp-1');
+  expect(chats.deliveries.map((d) => d.acpSessionId)).toEqual(['acp-1']);
+  expect(store.chat('general', 'p-atlas')).toBeUndefined();
+
+  release.resolve();
+  await ambient;
+  expect(store.chat('general', 'p-atlas')?.acpSessionId).toBe('acp-2');
+});
+
+test('wakes for the same channel and project still go one at a time, to one chat', async () => {
+  const { chats, projects, waker } = setup();
+  projects.next = RPAI;
+  await Promise.all([waker.wake(generalEvent('general', 'a')), waker.wake(generalEvent('general', 'b'))]);
+  expect(chats.spawns).toHaveLength(1);
+  expect(chats.deliveries.map((d) => d.acpSessionId)).toEqual(['acp-1', 'acp-1']);
+});
+
+test("a split channel's chats are told to leave the channel's other messages to other chats", async () => {
+  const { chats, projects, waker } = setup();
+  projects.next = RPAI;
+  await waker.wake(generalEvent('general', 'first'));
+  await waker.wake(generalEvent('general', 'second'));
+  for (const { text } of chats.deliveries) {
+    expect(text).toContain(SPLIT_NOTE);
+    expect(text.indexOf(SPLIT_NOTE)).toBeGreaterThan(text.indexOf('> '));
+  }
+  expect(SPLIT_NOTE).toContain('Only the new messages listed above are yours to handle.');
+  expect(SPLIT_NOTE).toContain('never answer or act on them, use them only as context');
+
+  // A forum post has its own chat: nothing there belongs to another one.
+  await waker.wake(wakeEvent('post1', 'hi'));
+  expect(chats.deliveries.at(-1)!.text).not.toContain(SPLIT_NOTE);
 });

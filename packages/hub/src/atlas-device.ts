@@ -48,14 +48,22 @@ export interface AtlasDeviceOptions {
 export interface AtlasChats {
   /** Opens a new chat in `cwd`. Resolves once the conversation exists; prompts nothing. */
   spawn(cwd: string, requestId: string): Promise<ChatTarget>;
-  /** Hands `text` to an existing chat: steer into a live turn, else prompt (resuming if closed). */
-  deliver(chat: ChatTarget, text: string): Promise<DeliveryOutcome>;
+  /**
+   * Hands `text` to an existing chat: steer into a live turn, else prompt (resuming if closed).
+   * Resolves once the text is sent; whether the chat took it settles later, in `accepted`.
+   */
+  deliver(chat: ChatTarget, text: string): Promise<Delivery>;
   /** The live run holding this conversation, from the relay's session list; `undefined` when none. */
   liveRun(machineId: MachineId, acpSessionId: string): Promise<SessionInfo | undefined>;
   stop(): void;
 }
 
 export type DeliveryOutcome = 'steered' | 'prompted' | 'unconfirmed';
+
+/** A message sent to a chat. `accepted` rejects when the chat refused it. */
+export interface Delivery {
+  accepted: Promise<DeliveryOutcome>;
+}
 
 /** Re-mint the device token when less than this is left of its 12 h life. */
 export const TOKEN_REFRESH_MARGIN_MS = 60 * 60_000;
@@ -81,6 +89,8 @@ export class AtlasDevice implements AtlasChats {
   readonly #fresh = new Map<string, AcpSessionHandle>();
   /** The relay request id of the last `session_spawn_request` sent, read by `spawn`. */
   #lastSpawnRequestId: string | undefined;
+  /** Prompts still waiting for a refusal, per run: its handle is closed when the last one is done. */
+  readonly #prompting = new Map<string, number>();
 
   constructor(options: AtlasDeviceOptions) {
     this.#options = options;
@@ -164,22 +174,23 @@ export class AtlasDevice implements AtlasChats {
     return { acpSessionId: handle.acpSessionId, machineId: handle.machineId, cwd: handle.cwd };
   }
 
-  async deliver(chat: ChatTarget, text: string): Promise<DeliveryOutcome> {
+  async deliver(chat: ChatTarget, text: string): Promise<Delivery> {
     await this.ready();
     const fresh = this.#fresh.get(chat.acpSessionId);
     if (fresh) {
       this.#fresh.delete(chat.acpSessionId);
-      return this.#prompt(fresh, text);
+      return { accepted: this.#prompt(fresh, text) };
     }
     const run = await this.liveRun(chat.machineId, chat.acpSessionId);
     if (run?.turnOpen === true) {
       const steered = await this.#steer(run, text);
-      if (steered !== 'no-turn') return steered;
+      if (steered !== 'no-turn') return { accepted: Promise.resolve(steered) };
       // The turn ended between the list and the steer; a prompt starts the next one.
     }
     // Never a second resume of a run that is already open: attach to it instead. If another
     // device opens it between the list and the resume, the relay answers `session_already_open`
-    // and `resumeSession` attaches to that run.
+    // and `resumeSession` attaches to that run. An attach to a run this device still holds for
+    // an earlier prompt returns that handle.
     const handle = run
       ? await this.#client.attachSession(run)
       : await this.#client.resumeSession(
@@ -190,7 +201,7 @@ export class AtlasDevice implements AtlasChats {
           this.#options.approval,
           (await this.machine()).mcpServers ?? [],
         );
-    return this.#prompt(handle, text);
+    return { accepted: this.#prompt(handle, text) };
   }
 
   /** The live run holding this conversation, from the relay's session list. */
@@ -219,17 +230,26 @@ export class AtlasDevice implements AtlasChats {
   }
 
   /**
-   * Sends one prompt and waits briefly for a refusal. omp answers a prompt only when its turn
-   * ends, so after `PROMPT_ACCEPT_MS` without a refusal the turn is taken as running and this
-   * device lets go of the session: Josh's own devices watch it, the hub does not need to.
+   * Sends one prompt (before its first await, so the caller may treat it as sent) and waits
+   * briefly for a refusal. omp answers a prompt only when its turn ends, so after
+   * `PROMPT_ACCEPT_MS` without a refusal the turn is taken as running and this device lets go of
+   * the session: Josh's own devices watch it, the hub does not need to. A later prompt to the
+   * same run within that wait shares the handle, which is closed once neither waits any more.
    */
   async #prompt(handle: AcpSessionHandle, text: string): Promise<DeliveryOutcome> {
-    const settled = this.#client.prompt(handle.envelopeSessionId, text).then(
+    const run = handle.envelopeSessionId;
+    this.#prompting.set(run, (this.#prompting.get(run) ?? 0) + 1);
+    const settled = this.#client.prompt(run, text).then(
       () => undefined,
       (err: unknown) => err ?? new Error('prompt rejected'),
     );
     const early = await withTimeout(settled, PROMPT_ACCEPT_MS);
-    this.#client.closeSession(handle.envelopeSessionId);
+    const left = (this.#prompting.get(run) ?? 1) - 1;
+    if (left > 0) this.#prompting.set(run, left);
+    else {
+      this.#prompting.delete(run);
+      this.#client.closeSession(run);
+    }
     if (early === undefined || early === TIMED_OUT) return 'prompted';
     if (promptRefusedAsBusy(early)) {
       // A turn started between the list and the prompt; queue into it instead.

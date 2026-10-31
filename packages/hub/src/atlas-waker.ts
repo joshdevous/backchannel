@@ -96,7 +96,11 @@ export class AtlasWaker implements Waker {
   readonly #options: AtlasWakerOptions;
   readonly #now: () => number;
   readonly #newRequestId: () => string;
-  /** One wake at a time per Discord channel, so a second wake sees the first one's mapping and project. */
+  /**
+   * One wake at a time per chat key (a post, or a channel and project), so a second wake for a
+   * key sees the first one's chat. Held through a spawn and until a message is sent, never
+   * through classifying or waiting for the chat to accept it.
+   */
   readonly #chains = new Map<string, Promise<void>>();
 
   constructor(options: AtlasWakerOptions) {
@@ -107,21 +111,8 @@ export class AtlasWaker implements Waker {
     if (abandoned > 0) log(`atlas wake: marked ${abandoned} spawn(s) from a previous run as failed`);
   }
 
-  wake(event: WakeEvent): Promise<void> {
-    const previous = this.#chains.get(event.channelId) ?? Promise.resolve();
-    const next = previous.then(() => this.#wake(event));
-    this.#chains.set(event.channelId, next);
-    void next.finally(() => {
-      if (this.#chains.get(event.channelId) === next) this.#chains.delete(event.channelId);
-    });
-    return next;
-  }
-
-  stop(): void {
-    this.#options.chats.stop();
-  }
-
-  async #wake(event: WakeEvent): Promise<void> {
+  /** Settles once the batch is sent to a chat (or dropped); the chat's acceptance is logged later. */
+  async wake(event: WakeEvent): Promise<void> {
     const { store } = this.#options;
     store.pruneWakes(this.#now() - 24 * HOUR_MS);
     let tag = `channel=${event.channelId} messages=${event.messages.length}`;
@@ -133,9 +124,11 @@ export class AtlasWaker implements Waker {
     let earlierFetch: Promise<ChannelMessage[]> | undefined;
     const earlier = () => (earlierFetch ??= this.#earlier(event));
 
-    // A forum post keeps the chat (and project) it was first opened with: it is classified only
-    // when that chat is opened. A plain channel is classified every batch, with the project its
-    // previous batch went to as a hint, and has one chat per project.
+    // Classified at once, outside any lock: a batch never waits for another one's spawn or
+    // delivery to be routed. A forum post keeps the chat (and project) it was first opened with,
+    // so it is classified only when it has no chat yet and nothing is opening one. A plain
+    // channel is classified every batch, with the project its previous batch went to as a hint,
+    // and has one chat per project.
     const post = event.postTitle !== undefined;
     let classification: Classification | undefined;
     if (!post) {
@@ -147,8 +140,53 @@ export class AtlasWaker implements Waker {
       });
       store.setLastProject(event.channelId, classification.name, this.#now());
       tag += classificationTag(classification);
+    } else if (decideWake(store, event.channelId, undefined, this.#now()).kind === 'spawn') {
+      classification = await this.#classifyPost(event, earlier);
+      tag += classificationTag(classification);
     }
-    const projectId = classification ? (classification.project?.id ?? UNFILED) : undefined;
+    const projectId = post ? undefined : (classification!.project?.id ?? UNFILED);
+    const key = post ? event.channelId : `${event.channelId}/${projectId}`;
+    await this.#locked(key, () => this.#route(event, tag, classification, projectId, earlier));
+  }
+
+  stop(): void {
+    this.#options.chats.stop();
+  }
+
+  /** Runs `work` after every earlier `work` for `key` has finished. */
+  #locked(key: string, work: () => Promise<void>): Promise<void> {
+    const next = (this.#chains.get(key) ?? Promise.resolve()).then(work);
+    this.#chains.set(key, next);
+    void next.finally(() => {
+      if (this.#chains.get(key) === next) this.#chains.delete(key);
+    });
+    return next;
+  }
+
+  #classifyPost(event: WakeEvent, earlier: () => Promise<ChannelMessage[]>): Promise<Classification> {
+    return earlier().then((messages) =>
+      this.#options.projects.classify({
+        forumName: event.forumName,
+        postTitle: event.postTitle,
+        messages: event.messages,
+        earlier: messages,
+      }),
+    );
+  }
+
+  /**
+   * Under the chat key's lock: message its chat, open one, or drop the batch. `projectId`
+   * undefined is a forum post, whose `classification` is unset when it was not needed.
+   */
+  async #route(
+    event: WakeEvent,
+    tag: string,
+    classification: Classification | undefined,
+    projectId: string | undefined,
+    earlier: () => Promise<ChannelMessage[]>,
+  ): Promise<void> {
+    const { store } = this.#options;
+    const post = projectId === undefined;
     const decision = decideWake(store, event.channelId, projectId, this.#now());
     if (decision.kind === 'drop') {
       log(`atlas wake dropped ${tag}: ${decision.why}`);
@@ -165,19 +203,23 @@ export class AtlasWaker implements Waker {
       if (decision.kind === 'deliver') {
         const chat = store.chat(event.channelId, projectId)!;
         store.recordWake(event.channelId, 'deliver', this.#now());
-        const outcome = await this.#options.chats.deliver(chat, followUp(event, this.#options, { projectName: chat.projectName, split: !post }));
-        const project = classification ? '' : ` project="${chat.projectName}"`;
-        log(`atlas wake ${outcome} ${tag}${project} session=${chat.acpSessionId}`);
+        const project = post ? ` project="${chat.projectName}"` : '';
+        const { accepted } = await this.#options.chats.deliver(
+          chat,
+          followUp(event, this.#options, { projectName: chat.projectName, split: !post }),
+        );
+        log(`atlas wake sent ${tag}${project} session=${chat.acpSessionId}`);
+        void accepted.then(
+          (outcome) => log(`atlas wake ${outcome} session=${chat.acpSessionId}`),
+          (err) => logError(`atlas wake refused ${tag}${project} session=${chat.acpSessionId}`, err),
+        );
         return;
       }
 
       if (!classification) {
-        classification = await this.#options.projects.classify({
-          forumName: event.forumName,
-          postTitle: event.postTitle,
-          messages: event.messages,
-          earlier: await earlier(),
-        });
+        // A post that gained a chat or a pending spawn while this wake was outside the lock, and
+        // lost it again: rare enough to classify here.
+        classification = await this.#classifyPost(event, earlier);
         tag += classificationTag(classification);
       }
       const route: Route = {
@@ -219,7 +261,10 @@ export class AtlasWaker implements Waker {
     return [];
   }
 
-  /** One spawn attempt, settled in the store under its own request id whenever it finishes. */
+  /**
+   * One spawn attempt, settled in the store under its own request id whenever it finishes.
+   * Resolves once the first prompt is sent; filing and the prompt's acceptance are logged later.
+   */
   async #spawn(requestId: string, event: WakeEvent, route: Route, earlier: () => Promise<ChannelMessage[]>): Promise<void> {
     const { store, chats } = this.#options;
     const cwd = chatCwd(route.project, this.#options.cwd, this.#options.dirExists);
@@ -245,16 +290,18 @@ export class AtlasWaker implements Waker {
     // Mapped before the prompt goes out: whatever happens to the prompt, the next wake for
     // this key messages this chat instead of opening another. Filed alongside the prompt; a
     // failed filing leaves the chat where Atlas put it (by cwd) and is never retried by a spawn.
-    const filing = this.#file(chat);
+    void this.#file(chat);
+    const where = `channel=${event.channelId} project="${chat.projectName}" cwd=${chat.cwd} request=${requestId} session=${chat.acpSessionId}`;
     try {
-      const outcome = await chats.deliver(chat, firstBrief(event, this.#options, await earlier(), route.scope));
-      log(
-        `atlas wake spawned+${outcome} channel=${event.channelId} project="${chat.projectName}" cwd=${chat.cwd} request=${requestId} session=${chat.acpSessionId}`,
+      const { accepted } = await chats.deliver(chat, firstBrief(event, this.#options, await earlier(), route.scope));
+      log(`atlas wake spawned+sent ${where}`);
+      void accepted.then(
+        (outcome) => log(`atlas wake first prompt ${outcome} session=${chat.acpSessionId}`),
+        (err) => logError(`atlas wake first prompt refused ${where}`, err),
       );
     } catch (err) {
-      logError(`atlas wake first prompt failed channel=${event.channelId} session=${chat.acpSessionId}`, err);
+      logError(`atlas wake first prompt failed ${where}`, err);
     }
-    await filing;
   }
 
   async #file(chat: AtlasChat): Promise<void> {

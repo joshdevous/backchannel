@@ -23,6 +23,12 @@ export interface ChatScope {
 export const MAX_MESSAGE_CHARS = 1500;
 /** Newest messages quoted into one brief; older ones in the batch are only counted. */
 export const MAX_MESSAGES = 10;
+/**
+ * For a chat of a split channel: the channel's other messages belong to other chats, which
+ * answer them. Without it a chat that reads the channel answers what another chat was given.
+ */
+export const SPLIT_NOTE =
+  'Only the new messages listed above are yours to handle. Other messages in this channel, including earlier ones and ones you see with `read`, are routed to other chats that answer them; never answer or act on them, use them only as context.';
 
 const REASONS: Record<WakeReason, string> = {
   mention: 'mentioned you',
@@ -145,6 +151,7 @@ export function firstBrief(
     `Discord channel id: ${event.channelId} (the \`channel\` argument of the backchannel tools). ${scopeLine(event, scope)}`,
     ...(earlier.length ? [`Earlier in the channel, for context (oldest first, shortened):\n${earlierLines(earlier, ctx.ownerId)}`] : []),
     `New messages, oldest first:\n\n${quoteMessages(event.messages, ctx.ownerId)}`,
+    ...(scope?.split ? [SPLIT_NOTE] : []),
     [
       'What to do:',
       `1. ${howToAnswer(event)}`,
@@ -161,6 +168,7 @@ export function followUp(event: WakeEvent, ctx: BriefContext, scope?: ChatScope)
   return [
     `New Backchannel messages in ${where(event, ctx)}, channel id ${event.channelId}${sorted}. Read more with \`read\`.`,
     quoteMessages(event.messages, ctx.ownerId),
+    ...(scope?.split ? [SPLIT_NOTE] : []),
     howToAnswer(event),
     rules(ctx.ownerId),
   ].join('\n\n');

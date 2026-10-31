@@ -107,8 +107,8 @@ test('a message for a chat whose turn is live is steered into it, not prompted',
   );
   servers.push(relay.server);
   const { d } = device(relay.url, tokenResponse(relay.url, 12 * 60 * 60_000));
-  const outcome = await d.deliver({ acpSessionId: 'acp-1', machineId: 'atlas-vps', cwd: '/root/chats' }, 'new messages');
-  expect(outcome).toBe('steered');
+  const delivery = await d.deliver({ acpSessionId: 'acp-1', machineId: 'atlas-vps', cwd: '/root/chats' }, 'new messages');
+  expect(await delivery.accepted).toBe('steered');
   const steer = relay.received.find((r) => r.payload.type === 'session_steer')!;
   expect(steer.payload).toMatchObject({ sessionId: 'run-1', text: 'new messages' });
   expect(relay.received.some((r) => r.payload.type === 'session_resume_request')).toBe(false);

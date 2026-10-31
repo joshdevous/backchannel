@@ -1,13 +1,12 @@
 /**
  * Which of Josh's Atlas projects a Backchannel conversation belongs to. A small Haiku call made
- * through omp with Josh's own Claude login (never an API key), trimmed by `omp/classify-trim.ts`
- * to just this file's instruction and one user message. Any failure, timeout or answer that is
- * not a project name lands on the default project (`ATLAS_DEFAULT_PROJECT`, `Backchannel`).
+ * through omp with Josh's own Claude login (never an API key; `omp-llm.ts`), trimmed by
+ * `omp/classify-trim.ts` to just this file's instruction and one user message. Any failure,
+ * timeout or answer that is not a listed project lands on the default project
+ * (`ATLAS_DEFAULT_PROJECT`, `Backchannel`). Excluded projects (`ATLAS_EXCLUDE_PROJECTS`) and
+ * everything under them are never listed.
  */
-import { homedir } from 'node:os';
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { AtlasProject, ProjectCatalogue } from './atlas-projects.ts';
+import { withoutExcluded, type AtlasProject, type ProjectCatalogue } from './atlas-projects.ts';
 import { TIMED_OUT, withTimeout } from './timeout.ts';
 import type { ChannelMessage } from './waker.ts';
 
@@ -125,6 +124,8 @@ export interface ProjectRouterOptions {
   llm: Llm;
   /** `ATLAS_DEFAULT_PROJECT`. */
   defaultName: string;
+  /** `ATLAS_EXCLUDE_PROJECTS`: names never offered or picked, with everything nested under them. */
+  exclude?: readonly string[];
   timeoutMs?: number;
   now?: () => number;
 }
@@ -147,17 +148,22 @@ export class ProjectRouter implements ProjectRouting {
       const project = pickProject(defaultName, projects);
       return { project, name: project?.name ?? defaultName, ms: this.#now() - started, fallback: why };
     };
+    let all: readonly AtlasProject[];
     try {
-      projects = await catalogue.projects();
+      all = await catalogue.projects();
     } catch (err) {
       return fallback(`no project list: ${err instanceof Error ? err.message : String(err)}`);
     }
+    projects = withoutExcluded(all, this.#options.exclude ?? []);
     try {
       const { system, user } = classifierPrompt(input, projects, defaultName);
       const answer = await withTimeout(llm.ask(system, user, timeoutMs), timeoutMs);
       if (answer === TIMED_OUT) return fallback(`no answer within ${timeoutMs / 1000}s`);
       const project = pickProject(answer.text, projects);
-      if (!project) return fallback(`answer ${JSON.stringify(oneLine(answer.text, 80))} is not a project`);
+      if (!project) {
+        const why = pickProject(answer.text, all) ? 'is excluded' : 'is not a project';
+        return fallback(`answer ${JSON.stringify(oneLine(answer.text, 80))} ${why}`);
+      }
       return { project, name: project.name, ms: this.#now() - started };
     } catch (err) {
       return fallback(`classifier failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -166,115 +172,5 @@ export class ProjectRouter implements ProjectRouting {
 
   file(projectId: string, conversationId: string): Promise<void> {
     return this.#options.catalogue.file(projectId, conversationId);
-  }
-}
-
-/** The text and usage of the reply in `omp -p --mode json` output; throws unless Anthropic served it. */
-export function parseOmpOutput(stdout: string): LlmAnswer {
-  let last: OmpMessage | undefined;
-  for (const line of stdout.split('\n')) {
-    if (!line.startsWith('{')) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (typeof parsed !== 'object' || parsed === null || !('message' in parsed)) continue;
-    const message = parsed.message;
-    if (typeof message === 'object' && message !== null && 'usage' in message) last = message;
-  }
-  if (!last) throw new Error('omp printed no reply');
-  if (last.provider !== 'anthropic') throw new Error(`reply came from ${String(last.provider)}, not anthropic`);
-  if (last.stopReason !== undefined && last.stopReason !== 'stop') throw new Error(`reply stopped with ${String(last.stopReason)}`);
-  const text = (Array.isArray(last.content) ? last.content : [])
-    .map((part: unknown) =>
-      typeof part === 'object' && part !== null && 'type' in part && part.type === 'text' && 'text' in part && typeof part.text === 'string'
-        ? part.text
-        : '',
-    )
-    .join('');
-  const usage: OmpUsage = typeof last.usage === 'object' && last.usage !== null ? last.usage : {};
-  const count = (value: unknown) => (typeof value === 'number' ? value : 0);
-  return {
-    text,
-    usage: { input: count(usage.input), output: count(usage.output), cacheRead: count(usage.cacheRead), cacheWrite: count(usage.cacheWrite) },
-  };
-}
-
-interface OmpUsage {
-  input?: unknown;
-  output?: unknown;
-  cacheRead?: unknown;
-  cacheWrite?: unknown;
-}
-
-/** A message object from omp's JSON event stream; fields checked before use. */
-interface OmpMessage {
-  provider?: unknown;
-  stopReason?: unknown;
-  content?: unknown;
-  usage?: unknown;
-}
-
-export interface OmpLlmOptions {
-  /** `OMP_BIN`. */
-  bin: string;
-  model?: string;
-}
-
-export const DEFAULT_OMP_BIN = '/root/projects/.atlas-deploy/node_modules/.bin/omp';
-export const CLASSIFIER_MODEL = 'anthropic/claude-haiku-4-5';
-const OMP_DIR = fileURLToPath(new URL('../omp/', import.meta.url));
-
-/** One `omp -p` run per call: Josh's Claude login, trimmed to this call's own prompt. */
-export class OmpLlm implements Llm {
-  readonly #options: OmpLlmOptions;
-
-  constructor(options: OmpLlmOptions) {
-    this.#options = options;
-  }
-
-  async ask(system: string, user: string, timeoutMs: number): Promise<LlmAnswer> {
-    const proc = Bun.spawn(
-      [
-        this.#options.bin,
-        '-p',
-        '--mode', 'json',
-        '--model', this.#options.model ?? CLASSIFIER_MODEL,
-        '--thinking', 'off',
-        // Replaced by the extension; the real instruction travels in BACKCHANNEL_CLASSIFY.
-        '--system-prompt', 'Classify.',
-        '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-session', '--no-title',
-        '--config', `${OMP_DIR}overlay.yml`,
-        '-e', `${OMP_DIR}classify-trim.ts`,
-        'classify',
-      ],
-      {
-        cwd: '/tmp',
-        stdin: 'ignore',
-        stdout: 'pipe',
-        stderr: 'pipe',
-        // Only what omp needs to find Josh's login: none of the hub's own secrets. omp is a
-        // `#!/usr/bin/env bun` script, and the service's PATH lacks bun's directory.
-        env: {
-          HOME: process.env.HOME ?? homedir(),
-          PATH: `${dirname(process.execPath)}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`,
-          BACKCHANNEL_CLASSIFY: JSON.stringify({ system, user }),
-        },
-      },
-    );
-    const timer = setTimeout(() => proc.kill(), timeoutMs);
-    try {
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]);
-      if (code !== 0) throw new Error(`omp exited with ${code}: ${oneLine(stderr || stdout, 300)}`);
-      return parseOmpOutput(stdout);
-    } finally {
-      clearTimeout(timer);
-    }
   }
 }

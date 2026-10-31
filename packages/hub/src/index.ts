@@ -11,13 +11,15 @@ import { startHub } from './hub.ts';
 import { log, logError } from './log.ts';
 import { keepAgentOnline } from './agent-online.ts';
 import { AgentPresence, createAgentBotApi } from './presence.ts';
-import { OmpLlm, ProjectRouter } from './project-classifier.ts';
+import { OmpLlm, OmpRpcLlm } from './omp-llm.ts';
+import { ProjectRouter } from './project-classifier.ts';
 
 try {
   const config = loadConfig();
 
   // Josh's agent is an Atlas chat; the hub reaches it as an Atlas device over the relay.
   let waker: AtlasWaker | undefined;
+  let classifier: OmpRpcLlm | undefined;
   let wakeDb: Database | undefined;
   let presence: AgentPresence | undefined;
   let agentOnline: { stop(): Promise<void> } | undefined;
@@ -39,21 +41,26 @@ try {
         return undefined;
       });
     }
+    // One omp kept running for the classifier, started now so the first batch finds it warm.
+    classifier = new OmpRpcLlm({ bin: atlas.ompBin, fallback: new OmpLlm({ bin: atlas.ompBin }) });
+    classifier.start();
     waker = new AtlasWaker({
       store: new AtlasStore(wakeDb),
       chats: device,
       projects: new ProjectRouter({
         catalogue: new AtlasProjects(atlas),
-        llm: new OmpLlm({ bin: atlas.ompBin }),
+        llm: classifier,
         defaultName: atlas.defaultProject,
+        exclude: atlas.excludeProjects,
       }),
       cwd: atlas.cwd,
       ownerId: atlas.ownerId,
       guildId: config.guildId,
       presence,
     });
+    const excluded = atlas.excludeProjects.length > 0 ? `, excluded projects ${atlas.excludeProjects.join(', ')}` : '';
     log(
-      `atlas wake-ups on: device ${atlas.deviceId}, machine ${atlas.machineId}, default project ${atlas.defaultProject}, fallback cwd ${atlas.cwd}`,
+      `atlas wake-ups on: device ${atlas.deviceId}, machine ${atlas.machineId}, default project ${atlas.defaultProject}, fallback cwd ${atlas.cwd}${excluded}`,
     );
   }
 
@@ -69,6 +76,7 @@ try {
       .stop()
       .then(() => {
         waker?.stop();
+        classifier?.stop();
         presence?.stop();
         wakeDb?.close();
         return agentOnline?.stop();

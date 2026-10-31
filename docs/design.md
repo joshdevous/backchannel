@@ -125,15 +125,30 @@ instead of empty content.
   a text channel) is classified every batch and has one chat per project it talks about: RPAI talk in #general
   goes to a #general × ResourcePack AI chat, other chatter to #general × Backchannel. Chats are
   remembered in the hub's SQLite (`atlas_chats`, keyed by channel and project id; rows from the
-  old per-channel key were moved under an empty "unfiled" project id).
+  old per-channel key were moved under an empty "unfiled" project id). Each chat of such a split
+  channel is told in every brief that only the new messages listed are its to handle: the
+  channel's other messages, including ones it sees with `read`, go to other chats that answer
+  them, so it uses them only as context (otherwise a chat that reads the channel answers what
+  another chat was given).
   **Classifier** (`project-classifier.ts`): one Haiku call through omp with Josh's Claude login
   (never an API key), shown the project names (with parent and description), where the batch
   was said (forum and post title, or channel name), the project the channel's previous batch
-  went to as a hint, up to 10 earlier messages and the batch, one line each. The hub's own omp
-  extension (`packages/hub/omp/classify-trim.ts`, with `overlay.yml` turning memory off) cuts the
-  request down to the two system blocks the subscription endpoint needs plus the classifier's
-  instruction and one user message: about 650 input tokens and under 10 output tokens a call
-  (measured), where an untrimmed omp call is ~84k. It takes about 5–7 s, mostly omp starting.
+  went to as a hint, up to 10 earlier messages and the batch, one line each. Projects named in
+  `ATLAS_EXCLUDE_PROJECTS` (case-insensitive) and everything nested under them (by `parentId`,
+  at any depth) are never listed, and an answer naming one routes to the default project. The
+  hub's own omp extension (`packages/hub/omp/classify-trim.ts`, with `overlay.yml` turning
+  memory off) cuts the request down to the two system blocks the subscription endpoint needs
+  plus the classifier's instruction and one user message, which travel in the prompt text as
+  `classify:<base64 JSON>`: about 500–650 input tokens and under 10 output tokens a call
+  (measured), where an untrimmed omp call is ~84k. omp logs an error thrown by an extension and
+  sends the request untouched, so a request without that prompt is never thrown on but replaced
+  by one asking for nothing.
+  The hub keeps one `omp --mode rpc` running for this (`omp-llm.ts`), started with the hub, and
+  sends each classification as a prompt, one at a time, resetting the session (`new_session`)
+  after each so no history builds up. Measured: ~0.6–0.8 s a call warm, ~4.4 s for a call made
+  while the process is still starting (it takes ~3.4 s), against ~5–5.6 s for a one-shot
+  `omp -p` (mostly omp starting). The process uses ~320 MB idle. A call that times out replaces
+  the process at once; if it dies, calls go to one-shot `omp -p` and it is restarted after 30 s.
   The answer must be a project name from the list (case-insensitive); anything else, a failure
   or no answer within 15 s routes to the default project (`ATLAS_DEFAULT_PROJECT`, `Backchannel`).
   The project list comes from `GET /api/projects` (Access headers), cached 10 min, refetched
@@ -154,6 +169,16 @@ instead of empty content.
   never a second resume of an open run). Limits: one spawn per chat (post, or channel and
   project) per 10 min, 120 wakes per hour; a batch over the hourly limit is dropped before it is
   classified.
+  **Ordering and latency.** A batch is classified as soon as it fires, outside any lock, so it
+  never waits behind another batch's spawn. Only then is it serialized, per chat key (a post, or
+  a channel and project): one wake at a time per key, so a second wake sees the first one's
+  chat. The lock is held through a spawn and until the message is sent, not while waiting for
+  the chat to accept it (up to 15 s for a prompt; omp answers a prompt only when its turn ends):
+  that outcome, or a refusal, is logged later (`atlas wake prompted|steered|unconfirmed` or
+  `refused`). A prompt refused because a turn just started is steered into it instead; nothing
+  else is retried, since re-sending could run a message twice. A forum post that already has a
+  chat is never classified again; a post with no chat yet is classified before taking its lock
+  unless a spawn for it is pending.
   `packages/hub/scripts/wake-test.ts` drives the same code by hand (`probe`, `spawn`, `message`).
 - **Debounce.** The hub collects the messages that wake the agent per channel and sends them as
   one wake `WAKE_QUIET_MS` (1.5 s) after the last message in that channel, but never later than
@@ -195,5 +220,7 @@ Hub reads env: `DISCORD_TOKEN`, `GUILD_ID`, `DB_PATH`, `ATLAS_AGENT_BOT_ID`, and
 `ATLAS_URL` (the Atlas web origin, required), and optional `ATLAS_WAKE_MACHINE` (`atlas-vps`),
 `ATLAS_WAKE_CWD` (`/root/chats`, used when a project has no checkout here), `ATLAS_WAKE_DEVICE_ID`
 (`backchannel-hub`), `ATLAS_WAKE_APPROVAL` (`write` by default; `always-ask`, `yolo` or
-`default`), `ATLAS_DEFAULT_PROJECT` (`Backchannel`) and `OMP_BIN` (the omp the classifier runs,
-`/root/projects/.atlas-deploy/node_modules/.bin/omp` by default).
+`default`), `ATLAS_DEFAULT_PROJECT` (`Backchannel`), `ATLAS_EXCLUDE_PROJECTS` (comma-separated
+project names chats are never filed in, with everything nested under them; empty by default)
+and `OMP_BIN` (the omp the classifier runs, `/root/projects/.atlas-deploy/node_modules/.bin/omp`
+by default).

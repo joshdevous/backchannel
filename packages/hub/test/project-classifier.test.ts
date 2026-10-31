@@ -1,14 +1,14 @@
 import { expect, test } from 'bun:test';
-import { AtlasProjects, CATALOGUE_TTL_MS, chatCwd, parseProjects, type AtlasProject, type ProjectCatalogue } from '../src/atlas-projects.ts';
 import {
-  classifierPrompt,
-  parseOmpOutput,
-  pickProject,
-  ProjectRouter,
-  type ClassifyInput,
-  type Llm,
-  type LlmAnswer,
-} from '../src/project-classifier.ts';
+  AtlasProjects,
+  CATALOGUE_TTL_MS,
+  chatCwd,
+  parseProjects,
+  withoutExcluded,
+  type AtlasProject,
+  type ProjectCatalogue,
+} from '../src/atlas-projects.ts';
+import { classifierPrompt, pickProject, ProjectRouter, type ClassifyInput, type Llm, type LlmAnswer } from '../src/project-classifier.ts';
 
 const project = (id: string, name: string, over: Partial<AtlasProject> = {}): AtlasProject => ({
   id,
@@ -47,7 +47,7 @@ test('parses the project list: names, parents, this machine\'s checkouts', () =>
   };
   expect(parseProjects(body, 'atlas-vps')).toEqual([
     { id: 'a', name: 'Atlas', description: '', checkouts: ['/root/projects/atlas', '/root/projects/atlas-channel'] },
-    { id: 'b', name: 'Relay', parentName: 'Atlas', description: 'the relay', checkouts: [] },
+    { id: 'b', name: 'Relay', parentId: 'a', parentName: 'Atlas', description: 'the relay', checkouts: [] },
   ]);
   expect(() => parseProjects({ nope: [] }, 'atlas-vps')).toThrow('unexpected response shape');
 });
@@ -142,6 +142,46 @@ test('an invalid answer, a failure or a timeout all land on the default project'
   expect(noList.fallback).toContain('HTTP 502');
 });
 
+const WORK = [
+  project('p-uksbs', 'UKSBS'),
+  project('p-connect', 'Connect 2.0', { parentId: 'p-uksbs', parentName: 'UKSBS' }),
+  project('p-shortener', 'URL Shortener', { parentId: 'p-uksbs', parentName: 'UKSBS' }),
+  project('p-shortener-api', 'Shortener API', { parentId: 'p-shortener', parentName: 'URL Shortener' }),
+  project('p-college', 'College'),
+  project('p-dt6001', 'DT6001', { parentId: 'p-college', parentName: 'College' }),
+];
+
+test('an excluded project goes with everything nested under it, at any depth', () => {
+  const all = [...PROJECTS, ...WORK];
+  expect(withoutExcluded(all, ['uksbs', ' College ']).map((p) => p.name)).toEqual(['Backchannel', 'ResourcePack AI', 'Atlas']);
+  expect(withoutExcluded(all, ['URL Shortener']).map((p) => p.id)).not.toContain('p-shortener-api');
+  expect(withoutExcluded(all, ['URL Shortener']).map((p) => p.id)).toContain('p-connect');
+  expect(withoutExcluded(all, [])).toEqual(all);
+});
+
+test('excluded projects are never offered, and an answer naming one lands on the default project', async () => {
+  let prompt = '';
+  const classifier = new ProjectRouter({
+    catalogue: { projects: async () => [...PROJECTS, ...WORK], file: async () => {} },
+    llm: {
+      ask: async (_system, user) => {
+        prompt = user;
+        return reply('Connect 2.0');
+      },
+    },
+    defaultName: 'Backchannel',
+    exclude: ['UKSBS', 'College'],
+    timeoutMs: 50,
+  });
+  const result = await classifier.classify(input);
+  expect(result).toMatchObject({ name: 'Backchannel', project: { id: 'p-bc' } });
+  expect(result.fallback).toContain('"Connect 2.0" is excluded');
+  for (const name of ['UKSBS', 'Connect 2.0', 'URL Shortener', 'Shortener API', 'College', 'DT6001']) {
+    expect(prompt).not.toContain(name);
+  }
+  expect(prompt).toContain('"ResourcePack AI"');
+});
+
 test('the prompt lists the projects, where it was said, the hint and the messages, each quoted on its own line', () => {
   const { system, user } = classifierPrompt(
     {
@@ -169,16 +209,4 @@ test('the default project is offered even when Atlas has no project by that name
   const { user } = classifierPrompt(input, [project('p-atlas', 'Atlas')], 'Backchannel');
   expect(user).toContain('- "Backchannel"');
   expect(user).toContain('Where: Channel "#general"');
-});
-
-test("omp's JSON output: the last reply with usage, served by Anthropic", () => {
-  const line = (message: object) => JSON.stringify({ type: 'message_end', message });
-  const ok = [
-    '{"type":"session"}',
-    'not json',
-    line({ provider: 'anthropic', stopReason: 'stop', content: [{ type: 'text', text: 'Atlas' }], usage: { input: 312, output: 3, cacheRead: 0, cacheWrite: 0 } }),
-  ].join('\n');
-  expect(parseOmpOutput(ok)).toEqual({ text: 'Atlas', usage: { input: 312, output: 3, cacheRead: 0, cacheWrite: 0 } });
-  expect(() => parseOmpOutput(line({ provider: 'openai', stopReason: 'stop', content: [], usage: {} }))).toThrow('not anthropic');
-  expect(() => parseOmpOutput('{"type":"session"}')).toThrow('no reply');
 });

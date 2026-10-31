@@ -44,9 +44,9 @@ try {
     const requestId = crypto.randomUUID();
     const chat = await device.spawn(cwd, requestId);
     console.log(`spawned session ${chat.acpSessionId} on ${chat.machineId} in ${chat.cwd} (request ${requestId})`);
-    console.log(`first prompt: ${await device.deliver(chat, text)}`);
+    console.log(`first prompt: ${await (await device.deliver(chat, text)).accepted}`);
   } else if (mode === 'message' && sessionId) {
-    const outcome = await device.deliver({ acpSessionId: sessionId, machineId: config.machineId, cwd }, text);
+    const outcome = await (await device.deliver({ acpSessionId: sessionId, machineId: config.machineId, cwd }, text)).accepted;
     console.log(`message to ${sessionId}: ${outcome}`);
   } else {
     console.error('usage: wake-test.ts probe | spawn [--cwd dir] [--text t] | message <acpSessionId> [--cwd dir] [--text t]');

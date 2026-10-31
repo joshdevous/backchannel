@@ -10,7 +10,8 @@ import { log, logError } from './log.ts';
 export interface AtlasProject {
   id: string;
   name: string;
-  /** Name of the parent project, when nested. */
+  /** Id and name of the parent project, when nested (the name only when the parent is listed). */
+  parentId?: string;
   parentName?: string;
   /** Empty when unset in Atlas. */
   description: string;
@@ -57,7 +58,8 @@ export function parseProjects(body: unknown, machineId: string): AtlasProject[] 
   }
   const names = new Map(rows.map((row) => [row.id, row.name]));
   return rows.map(({ id, name, entry }) => {
-    const parentName = typeof entry.parentId === 'string' ? names.get(entry.parentId) : undefined;
+    const parentId = typeof entry.parentId === 'string' && entry.parentId !== '' ? entry.parentId : undefined;
+    const parentName = parentId !== undefined ? names.get(parentId) : undefined;
     const checkouts: string[] = [];
     for (const c of Array.isArray(entry.checkouts) ? entry.checkouts : []) {
       if (typeof c !== 'object' || c === null || !('machineId' in c) || !('path' in c)) continue;
@@ -66,11 +68,33 @@ export function parseProjects(body: unknown, machineId: string): AtlasProject[] 
     return {
       id,
       name,
+      ...(parentId !== undefined ? { parentId } : {}),
       ...(parentName !== undefined ? { parentName } : {}),
       description: typeof entry.description === 'string' ? entry.description.trim() : '',
       checkouts,
     };
   });
+}
+
+/**
+ * `projects` without the ones named in `excluded` (case-insensitive) and everything nested under
+ * them, at any depth.
+ */
+export function withoutExcluded(projects: readonly AtlasProject[], excluded: readonly string[]): AtlasProject[] {
+  const names = new Set(excluded.map((name) => name.trim().toLowerCase()).filter((name) => name !== ''));
+  if (names.size === 0) return [...projects];
+  const out = new Set(projects.filter((p) => names.has(p.name.toLowerCase())).map((p) => p.id));
+  // Grow the excluded set by children until nothing changes; a parent cycle cannot loop forever.
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const p of projects) {
+      if (!out.has(p.id) && p.parentId !== undefined && out.has(p.parentId)) {
+        out.add(p.id);
+        grew = true;
+      }
+    }
+  }
+  return projects.filter((p) => !out.has(p.id));
 }
 
 /** One entry of `GET /api/projects` as received: nothing about it is trusted yet. */
