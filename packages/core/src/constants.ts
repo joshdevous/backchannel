@@ -10,7 +10,7 @@ export const STATUS_TAGS = [
 export type StatusName = (typeof STATUS_TAGS)[number]['name'];
 
 export const STAR_EMOJI = '⭐';
-export const STAR_THRESHOLD = 3;
+export const STAR_THRESHOLD = 2;
 
 /** The agent's own bot reacts this to a message that woke it: "got it, on it". */
 export const ACK_EMOJI = '👀';

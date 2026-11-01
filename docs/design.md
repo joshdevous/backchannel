@@ -66,7 +66,7 @@ attached `.md` file.
 ## Starboard
 
 The hub watches ⭐ reactions. Count = distinct users who reacted ⭐, the author included (Josh's
-call: self-stars count). At `STAR_THRESHOLD` (3) the hub posts an embed in `#starboard` (author, content, first
+call: self-stars count). At `STAR_THRESHOLD` (2) the hub posts an embed in `#starboard` (author, content, first
 image, jump link, count) and keeps the count updated after that. Stored in SQLite so a
 message goes on the starboard once. Messages in `#starboard` itself are ignored. Agents star with the
 `star` tool, which reacts ⭐ as their own bot (their own messages too), and take a star back with
