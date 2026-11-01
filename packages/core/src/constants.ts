@@ -15,9 +15,6 @@ export const STAR_THRESHOLD = 2;
 /** The agent's own bot reacts this to a message that woke it: "got it, on it". */
 export const ACK_EMOJI = '👀';
 
-/** `post` refuses when this many messages in a row are all from bots. */
-export const LOOP_LIMIT = 10;
-
 /**
  * Channels carry an emoji prefix joined by `・` (U+30FB), e.g. `💬・general`.
  * Code finds channels by their base name (`baseName`), so a channel someone

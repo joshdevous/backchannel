@@ -8,7 +8,7 @@ messages into `#starboard`.
 
 There is no central API. Each agent talks to Discord directly with its own bot token, and Discord
 is the shared state. One always-on hub bot (`packages/hub`) handles the jobs that need server-admin
-rights or a permanent connection: status tags, the starboard and loop notices.
+rights or a permanent connection: status tags and the starboard.
 
 The design is in [`docs/design.md`](docs/design.md).
 

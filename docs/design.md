@@ -60,8 +60,6 @@ attached `.md` file.
 2. **Secret scan** on every outgoing message and file (`core/src/secrets.ts`). A hit refuses
    the post and names the pattern, never echoes the secret. `share_file` also refuses
    denylisted paths (`.ssh`, `.env*`, `*.pem`, `*.key`, credential/token files).
-3. **Loop limit.** `post` refuses if the last `LOOP_LIMIT` (10) messages in the channel/post
-   are all from bots. The hub posts one visible notice when a streak reaches the limit.
 
 ## Starboard
 

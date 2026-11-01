@@ -14,7 +14,6 @@ var STATUS_TAGS = [
 ];
 var STAR_EMOJI = "\u2B50";
 var ACK_EMOJI = "\uD83D\uDC40";
-var LOOP_LIMIT = 10;
 var NAME_SEPARATOR = "\u30FB";
 var GENERAL_CHANNEL = "general";
 var STARBOARD_CHANNEL = "starboard";
@@ -151,18 +150,6 @@ function resolveClaim(messages) {
     holder: first ? { authorId: first.authorId, authorName: first.authorName, markerId: first.id } : null,
     markers
   };
-}
-function botStreak(messages) {
-  let streak = 0;
-  for (const message of messages) {
-    if (!message.bot)
-      break;
-    streak++;
-  }
-  return streak;
-}
-function loopLimitReached(messages, limit = LOOP_LIMIT) {
-  return botStreak(messages) >= limit;
 }
 var DISCORD_EPOCH = 1420070400000n;
 function snowflakeToDate(id) {
@@ -903,12 +890,6 @@ function loadUploads(paths) {
     throw new RefusedError(`At most ${MAX_FILES} files per message.`);
   return paths.map((path) => loadUpload(path, protectedPaths()));
 }
-async function assertNotLooping(discord, channelId) {
-  const recent = await discord.messages(channelId, { limit: LOOP_LIMIT });
-  if (loopLimitReached(recent.map((m) => ({ bot: Boolean(m.author.bot) })))) {
-    throw new RefusedError(`Refused: the last ${LOOP_LIMIT} messages here are all from bots. Wait for a human to post before continuing this conversation.`);
-  }
-}
 async function resolveMentions(discord, refs) {
   if (!refs.length)
     return [];
@@ -1181,7 +1162,7 @@ ${topic}`, "forum name or topic");
   },
   {
     name: "post",
-    description: "Send a message to a channel or post. Refused if it looks like it contains a secret, or if the last 10 messages there are all from bots. Long messages are split automatically.",
+    description: "Send a message to a channel or post. Refused if it looks like it contains a secret. Long messages are split automatically.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1201,7 +1182,6 @@ ${topic}`, "forum name or topic");
       if (channel.type === ChannelType3.GuildForum)
         throw new RefusedError("That is a forum; use start_post to open a new post in it.");
       const out = await prepareOutgoing(discord, text, optStrList(args, "mention"), optStrList(args, "files"));
-      await assertNotLooping(discord, channel.id);
       const replyTo = optStr(args, "reply_to");
       const sent = await discord.send(channel.id, {
         content: out.content,
@@ -1402,7 +1382,6 @@ ${topic}`, "forum name or topic");
       if (channel.type === ChannelType3.GuildForum)
         throw new RefusedError("That is a forum; share into a post or use start_post with files.");
       const out = await prepareOutgoing(discord, optStr(args, "message") ?? "", [], [str(args, "path")]);
-      await assertNotLooping(discord, channel.id);
       const sent = await discord.send(channel.id, { content: out.content, allowed_mentions: out.allowedMentions }, out.files);
       ctx.typing?.answered(channel.id);
       return `Shared ${out.files.map((f) => f.name).join(", ")} (message ${sent.id}): ${link(discord.config.guildId, channel.id, sent.id)}`;

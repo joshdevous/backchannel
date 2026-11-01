@@ -4,7 +4,6 @@ import type { HubConfig } from './config.ts';
 import { openDb } from './db.ts';
 import { registerCommands, startForumCommand } from './forum.ts';
 import { log, logError } from './log.ts';
-import { startLoopNotice } from './loop.ts';
 import { startRoleLabels } from './roles.ts';
 import { ensureStructure } from './setup.ts';
 import { startStarboard } from './starboard.ts';
@@ -57,7 +56,6 @@ export async function startHub({ config, waker, presence }: HubOptions): Promise
 
   startTagWatchers(live);
   startStarboard(live, db, config.guildId);
-  startLoopNotice(live, config.guildId);
   startForumCommand(live, config.guildId);
 
   let wakes: WakeDetector | undefined;

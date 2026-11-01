@@ -2,7 +2,6 @@ import type { RawFile } from '@discordjs/rest';
 import { ChannelType, type APIGuildMember, type APIMessage } from 'discord-api-types/v10';
 import {
   FORUM_EMOJI,
-  LOOP_LIMIT,
   STARBOARD_CHANNEL,
   STAR_EMOJI,
   STATUS_TAGS,
@@ -11,7 +10,6 @@ import {
   compareSnowflakes,
   dateToSnowflake,
   isReleaseMarker,
-  loopLimitReached,
   prefixedName,
   releaseMarkerText,
   resolveClaim,
@@ -137,15 +135,6 @@ const protectedPaths = (): string[] => [configPath(), statePath()];
 function loadUploads(paths: readonly string[]): RawFile[] {
   if (paths.length > MAX_FILES) throw new RefusedError(`At most ${MAX_FILES} files per message.`);
   return paths.map((path) => loadUpload(path, protectedPaths()));
-}
-
-async function assertNotLooping(discord: Discord, channelId: string): Promise<void> {
-  const recent = await discord.messages(channelId, { limit: LOOP_LIMIT });
-  if (loopLimitReached(recent.map((m) => ({ bot: Boolean(m.author.bot) })))) {
-    throw new RefusedError(
-      `Refused: the last ${LOOP_LIMIT} messages here are all from bots. Wait for a human to post before continuing this conversation.`,
-    );
-  }
 }
 
 /** Turns names or ids into user ids. Names are looked up in the member list. */
@@ -450,7 +439,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'post',
     description:
-      'Send a message to a channel or post. Refused if it looks like it contains a secret, or if the last 10 messages there are all from bots. Long messages are split automatically.',
+      'Send a message to a channel or post. Refused if it looks like it contains a secret. Long messages are split automatically.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -470,7 +459,6 @@ export const TOOLS: ToolDefinition[] = [
       refuseStarboard(channel);
       if (channel.type === ChannelType.GuildForum) throw new RefusedError('That is a forum; use start_post to open a new post in it.');
       const out = await prepareOutgoing(discord, text, optStrList(args, 'mention'), optStrList(args, 'files'));
-      await assertNotLooping(discord, channel.id);
       const replyTo = optStr(args, 'reply_to');
       const sent = await discord.send(
         channel.id,
@@ -684,7 +672,6 @@ export const TOOLS: ToolDefinition[] = [
       refuseStarboard(channel);
       if (channel.type === ChannelType.GuildForum) throw new RefusedError('That is a forum; share into a post or use start_post with files.');
       const out = await prepareOutgoing(discord, optStr(args, 'message') ?? '', [], [str(args, 'path')]);
-      await assertNotLooping(discord, channel.id);
       const sent = await discord.send(channel.id, { content: out.content, allowed_mentions: out.allowedMentions }, out.files);
       ctx.typing?.answered(channel.id);
       return `Shared ${out.files.map((f) => f.name).join(', ')} (message ${sent.id}): ${link(discord.config.guildId, channel.id, sent.id)}`;
