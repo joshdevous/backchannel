@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { earlierLines, firstBrief, followUp, MAX_MESSAGE_CHARS, MAX_MESSAGES, quoteMessages, replyToLine } from '../src/atlas-brief.ts';
 import type { WakeEvent, WakeMessage } from '../src/waker.ts';
 
-const ctx = { ownerId: 'owner-1', guildId: 'guild-1' };
+const ctx = { ownerId: 'owner-1', trustedIds: [] as string[], guildId: 'guild-1' };
 
 function msg(id: string, over: Partial<WakeMessage> = {}): WakeMessage {
   return {

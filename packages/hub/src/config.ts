@@ -4,8 +4,15 @@ import { DEFAULT_OMP_BIN } from './omp-llm.ts';
 
 /** Waking Josh's agent as an Atlas chat (`atlas-waker.ts`). */
 export interface AtlasWakeConfig {
-  /** Josh's own Discord user id; only his messages are instructions to the agent. */
+  /** Josh's own Discord user id; his messages are instructions to the agent. */
   ownerId: string;
+  /**
+   * `BACKCHANNEL_TRUSTED_IDS`: people Josh gave his own authority (Stephen). By user id, people only.
+   * Their messages are instructions too; UKSBS stays off limits to them as to everyone.
+   */
+  trustedIds: string[];
+  /** `ATLAS_WAKE_BLOCK_MCP`: MCP server names a woken chat never gets (Atlassian and UKSBS ones are always left out). */
+  blockedMcp: string[];
   /** Atlas web origin that mints the relay token. */
   atlasUrl: string;
   /** Atlas's agent Cloudflare Access service token (`/root/.config/atlas-agent-access`). */
@@ -76,8 +83,14 @@ export function loadAtlasWakeConfig(env: Record<string, string | undefined>): At
   if (approval !== 'default' && !(APPROVALS as readonly string[]).includes(approval)) {
     throw new Error(`ATLAS_WAKE_APPROVAL must be one of ${[...APPROVALS, 'default'].join(', ')}`);
   }
+  const trustedIds = parseIdList(env.BACKCHANNEL_TRUSTED_IDS, 'BACKCHANNEL_TRUSTED_IDS');
   return {
     ownerId,
+    trustedIds,
+    blockedMcp: (env.ATLAS_WAKE_BLOCK_MCP ?? '')
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => name !== ''),
     accessClientId,
     accessClientSecret,
     atlasUrl,
@@ -92,6 +105,16 @@ export function loadAtlasWakeConfig(env: Record<string, string | undefined>): At
     ompBin: env.OMP_BIN?.trim() || DEFAULT_OMP_BIN,
     approval: approval === 'default' ? undefined : (approval as ApprovalMode),
   };
+}
+
+/** A comma separated list of Discord user ids. Anything else is an error: a typo must not silently lose or grant authority. */
+export function parseIdList(raw: string | undefined, name: string): string[] {
+  const ids = (raw ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id !== '');
+  for (const id of ids) if (!/^\d{17,20}$/.test(id)) throw new Error(`${name} has "${id}", which is not a Discord user id`);
+  return [...new Set(ids)];
 }
 
 /** The bot user id a Discord bot token belongs to: its first dot-separated part, base64. */

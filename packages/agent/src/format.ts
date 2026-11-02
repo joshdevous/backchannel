@@ -51,7 +51,7 @@ export function overflowAttachment(message: Pick<APIMessage, 'attachments'>) {
 }
 
 /** The replied-to message as shown to the agent; `null` means it was deleted or could not be fetched. */
-export function replyTo(id: string, referenced: APIMessage | null, ownerId: string): ReplyTo {
+export function replyTo(id: string, referenced: APIMessage | null, ownerId: string, trustedIds: readonly string[] = []): ReplyTo {
   if (!referenced) return { id, text: '(message not available, maybe deleted)' };
   const author = displayName(referenced.author);
   const system = systemText(referenced.type, author, referenced.content);
@@ -59,7 +59,7 @@ export function replyTo(id: string, referenced: APIMessage | null, ownerId: stri
     id,
     author,
     author_id: referenced.author.id,
-    from_kind: classifyAuthor({ id: referenced.author.id, bot: referenced.author.bot }, ownerId),
+    from_kind: classifyAuthor({ id: referenced.author.id, bot: referenced.author.bot }, ownerId, undefined, trustedIds),
     text: shortText(system ?? renderMentions(referenced.content, referenced.mentions)),
   };
 }
@@ -73,13 +73,19 @@ export function replyTargetId(message: Pick<APIMessage, 'type' | 'message_refere
  * `referenced`: the replied-to message when the caller looked it up (`null`: gone); else the
  * one Discord embedded in `referenced_message` is used.
  */
-export function formatMessage(message: APIMessage, ownerId: string, fullText?: string, referenced?: APIMessage | null): FormattedMessage {
+export function formatMessage(
+  message: APIMessage,
+  ownerId: string,
+  fullText?: string,
+  referenced?: APIMessage | null,
+  trustedIds: readonly string[] = [],
+): FormattedMessage {
   const author = displayName(message.author);
   const formatted: FormattedMessage = {
     id: message.id,
     author,
     author_id: message.author.id,
-    from_kind: classifyAuthor({ id: message.author.id, bot: message.author.bot }, ownerId),
+    from_kind: classifyAuthor({ id: message.author.id, bot: message.author.bot }, ownerId, undefined, trustedIds),
     time: message.timestamp,
   };
   const system = systemText(message.type, author, message.content);
@@ -87,7 +93,7 @@ export function formatMessage(message: APIMessage, ownerId: string, fullText?: s
   else formatted.content = renderMentions(fullText ?? message.content, message.mentions);
   if (fullText !== undefined && system === undefined) formatted.full_text_from_attachment = true;
   const replyId = replyTargetId(message);
-  if (replyId) formatted.reply_to = replyTo(replyId, referenced !== undefined ? referenced : (message.referenced_message ?? null), ownerId);
+  if (replyId) formatted.reply_to = replyTo(replyId, referenced !== undefined ? referenced : (message.referenced_message ?? null), ownerId, trustedIds);
   if (message.attachments.length) {
     formatted.attachments = message.attachments.map((a) => ({ name: a.filename, url: a.url, size: a.size }));
   }
@@ -101,6 +107,8 @@ export interface FormatIo {
   fetchText?: (url: string) => Promise<string>;
   /** Looks up a replied-to message Discord did not embed. */
   fetchMessage?: (channelId: string, messageId: string) => Promise<APIMessage>;
+  /** People the owner gave their own authority; their messages read as `trusted`. */
+  trustedIds?: readonly string[];
 }
 
 /**
@@ -130,7 +138,7 @@ export async function formatMessages(messages: readonly APIMessage[], ownerId: s
           referenced = await io.fetchMessage(message.message_reference?.channel_id ?? message.channel_id, replyId).catch(() => null);
         }
       }
-      return formatMessage(message, ownerId, fullText, referenced);
+      return formatMessage(message, ownerId, fullText, referenced, io.trustedIds ?? []);
     }),
   );
 }

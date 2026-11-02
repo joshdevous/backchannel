@@ -54,3 +54,9 @@ test('refuses protected paths such as its own config', () => {
   writeFileSync(path, '{}');
   expect(() => loadUpload(path, [path])).toThrow(/config or state/);
 });
+
+test('refuses a file that refers to UKSBS, though its path is innocent', () => {
+  const path = join(dir, 'summary.md');
+  writeFileSync(path, 'the login bug is in the UKSBS connect repo');
+  expect(() => loadUpload(path)).toThrow(/UKSBS/);
+});

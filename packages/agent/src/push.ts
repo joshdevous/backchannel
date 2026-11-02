@@ -52,7 +52,7 @@ function renderMentions(message: Message, content: string): string {
   return content;
 }
 
-async function replyOf(message: Message, meId: string, ownerId: string): Promise<PushReply | undefined> {
+async function replyOf(message: Message, meId: string, ownerId: string, trustedIds: readonly string[]): Promise<PushReply | undefined> {
   const id = message.reference?.messageId;
   if (message.type !== MESSAGE_TYPE_REPLY || !id) return undefined;
   const ref = await message.fetchReference().catch(() => null);
@@ -60,7 +60,7 @@ async function replyOf(message: Message, meId: string, ownerId: string): Promise
   return {
     id: ref.id,
     author: ref.author.id === meId ? 'you' : nameOf(ref),
-    from_kind: classifyAuthor({ id: ref.author.id, bot: ref.author.bot }, ownerId),
+    from_kind: classifyAuthor({ id: ref.author.id, bot: ref.author.bot }, ownerId, undefined, trustedIds),
     text: shortText(systemText(ref.type, nameOf(ref), ref.content) ?? renderMentions(ref, ref.content)),
   };
 }
@@ -108,7 +108,7 @@ export async function startPush(server: Server, config: CompleteConfig, typing?:
       );
       if (!reason) return;
 
-      const reply = await replyOf(message, me, config.ownerId);
+      const reply = await replyOf(message, me, config.ownerId, config.trustedIds);
       const text = systemText(message.type, nameOf(message), message.content) ?? renderMentions(message, message.content);
       const content = pushContent(text, reason, reply, [...message.attachments.values()].map((a) => a.name));
 
@@ -116,7 +116,7 @@ export async function startPush(server: Server, config: CompleteConfig, typing?:
         channel_id: message.channelId,
         message_id: message.id,
         from: nameOf(message),
-        from_kind: classifyAuthor({ id: message.author.id, bot: message.author.bot }, config.ownerId),
+        from_kind: classifyAuthor({ id: message.author.id, bot: message.author.bot }, config.ownerId, undefined, config.trustedIds),
         reason,
       };
       if (thread) meta.post_title = thread.name;

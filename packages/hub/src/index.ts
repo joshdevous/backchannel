@@ -55,6 +55,7 @@ try {
       }),
       cwd: atlas.cwd,
       ownerId: atlas.ownerId,
+      trustedIds: atlas.trustedIds,
       guildId: config.guildId,
       presence,
     });

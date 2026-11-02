@@ -121,3 +121,15 @@ test('system messages read as a system line instead of empty content', async () 
   expect(m!.system).toBe('Stephen joined the server');
   expect(m!.content).toBeUndefined();
 });
+
+test('a trusted person reads as trusted in a message and in the reply it quotes', async () => {
+  const stephen = { id: '676926873669992459', username: 'stephen', global_name: null, discriminator: '0', avatar: null };
+  const bot = { id: 'bot', username: 'steveclaude', global_name: null, discriminator: '0', avatar: null, bot: true };
+  const text = message({ id: '5', author: stephen });
+  const asBot = message({ id: '6', author: { ...bot, id: stephen.id } });
+  const [a, b] = await formatMessages([text, asBot], 'owner', { trustedIds: [stephen.id] });
+  expect(a!.from_kind).toBe('trusted');
+  expect(b!.from_kind).toBe('agent');
+  const [c] = await formatMessages([message({ id: '7' })], 'owner');
+  expect(c!.from_kind).toBe('human');
+});

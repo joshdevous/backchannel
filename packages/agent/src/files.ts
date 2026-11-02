@@ -2,7 +2,7 @@ import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import type { RawFile } from '@discordjs/rest';
-import { deniedPathReason, scanForSecrets } from '@backchannel/core';
+import { deniedPathReason, restrictedReason, scanForSecrets } from '@backchannel/core';
 
 /** Discord's default upload cap for servers without boosts. */
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -73,6 +73,8 @@ export function loadUpload(
   if (text !== null) {
     const hit = scanForSecrets(text);
     if (hit) throw new RefusedError(`Refused: ${path} looks like it contains a ${hit}. Nothing was posted.`);
+    const restricted = restrictedReason(text);
+    if (restricted) throw new RefusedError(`Refused: ${path} refers to ${restricted}, which never goes through Backchannel. Nothing was posted.`);
   }
   return { name: basename(given), data };
 }

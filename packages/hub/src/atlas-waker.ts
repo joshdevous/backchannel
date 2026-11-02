@@ -15,6 +15,7 @@ import { UNFILED, type AtlasChat, type AtlasStore } from './atlas-store.ts';
 import { log, logError } from './log.ts';
 import type { TurnState, TypingStarter } from './presence.ts';
 import type { Classification, ProjectRouting } from './project-classifier.ts';
+import { visibleMessages, withoutRestricted } from './restrict.ts';
 import { TIMED_OUT, withTimeout } from './timeout.ts';
 import type { ChannelMessage, WakeEvent, Waker } from './waker.ts';
 
@@ -112,8 +113,14 @@ export class AtlasWaker implements Waker {
   }
 
   /** Settles once the batch is sent to a chat (or dropped); the chat's acceptance is logged later. */
-  async wake(event: WakeEvent): Promise<void> {
+  async wake(raw: WakeEvent): Promise<void> {
     const { store } = this.#options;
+    // First of all, before any classifier or chat sees it: UKSBS never goes through Backchannel.
+    const event = withoutRestricted(raw);
+    if (!event) {
+      log(`atlas wake dropped channel=${raw.channelId} messages=${raw.messages.length}: restricted`);
+      return;
+    }
     store.pruneWakes(this.#now() - 24 * HOUR_MS);
     let tag = `channel=${event.channelId} messages=${event.messages.length}`;
     // Before classifying: a batch that is dropped anyway costs no model call.
@@ -253,7 +260,7 @@ export class AtlasWaker implements Waker {
     if (!event.earlier) return [];
     try {
       const result = await withTimeout(event.earlier(), EARLIER_WAIT_MS);
-      if (result !== TIMED_OUT) return result;
+      if (result !== TIMED_OUT) return visibleMessages(result);
       log(`atlas wake: earlier messages not fetched within ${EARLIER_WAIT_MS / 1000}s channel=${event.channelId}`);
     } catch (err) {
       logError(`atlas wake: could not fetch earlier messages channel=${event.channelId}`, err);

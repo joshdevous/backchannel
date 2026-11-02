@@ -44,6 +44,9 @@ export function deniedPathReason(path: string): string | null {
   const segments = lower.split('/').filter(Boolean);
   const base = segments.at(-1) ?? '';
 
+  // UKSBS is Josh's employer's; see restricted.ts. `josh-uksbs` and `/projects/uksbs/` both match.
+  if (lower.includes('uksbs')) return 'UKSBS files';
+
   for (const dir of ['.ssh', '.gnupg', '.aws', '.kube', '.docker', '.backchannel']) {
     if (segments.slice(0, -1).includes(dir)) return `files inside ${dir}/`;
   }

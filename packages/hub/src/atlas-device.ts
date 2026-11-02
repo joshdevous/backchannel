@@ -27,6 +27,7 @@ import {
 } from '@atlas/shared-types';
 import type { ChatTarget } from './atlas-store.ts';
 import { log, logError } from './log.ts';
+import { allowedMcpServers } from './mcp-filter.ts';
 import { TIMED_OUT, withTimeout } from './timeout.ts';
 
 export interface AtlasDeviceOptions {
@@ -39,6 +40,8 @@ export interface AtlasDeviceOptions {
   machineId: string;
   /** Passed on spawn and resume; absent means omp's own default. */
   approval?: ApprovalMode;
+  /** Extra MCP server names (substring, case-insensitive) a woken chat never gets, on top of Atlassian and anything UKSBS. */
+  blockedMcp?: readonly string[];
   fetch?: typeof fetch;
   /** How long a wake waits for the relay socket before giving up. */
   readyTimeoutMs?: number;
@@ -158,7 +161,7 @@ export class AtlasDevice implements AtlasChats {
       cwd,
       undefined,
       this.#options.approval,
-      machine.mcpServers ?? [],
+      allowedMcpServers(machine.mcpServers ?? [], this.#options.blockedMcp),
     );
     // `spawnSession` sends synchronously before its first await, so this is its request.
     const relayRequestId = this.#lastSpawnRequestId;
@@ -199,7 +202,7 @@ export class AtlasDevice implements AtlasChats {
           chat.cwd,
           undefined,
           this.#options.approval,
-          (await this.machine()).mcpServers ?? [],
+          allowedMcpServers((await this.machine()).mcpServers ?? [], this.#options.blockedMcp),
         );
     return { accepted: this.#prompt(handle, text) };
   }

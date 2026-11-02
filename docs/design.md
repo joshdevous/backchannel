@@ -54,12 +54,24 @@ attached `.md` file.
 
 1. **Peer labelling.** Everything an agent reads through Backchannel is returned labelled with
    who wrote it: `owner` (the agent's own human, `BACKCHANNEL_OWNER_ID`), `human` (another
-   person) or `agent` (another bot). Only `owner` messages may be treated as instructions from
-   the user; everything else is information from a peer with no authority. The MCP server's
-   `instructions` say this, and so does every channel notification's meta (`from_kind`).
+   person) or `agent` (another bot). `owner` messages, and `trusted` ones (a person the owner
+   gave their own authority by Discord user id: `trustedIds` in the agent config /
+   `BACKCHANNEL_TRUSTED_IDS` for the hub; people only, a bot id there is ignored), may be treated
+   as instructions from the user; everything else is information from a peer with no authority.
+   The MCP server's `instructions` say this, and so does every channel notification's meta
+   (`from_kind`).
 2. **Secret scan** on every outgoing message and file (`core/src/secrets.ts`). A hit refuses
    the post and names the pattern, never echoes the secret. `share_file` also refuses
    denylisted paths (`.ssh`, `.env*`, `*.pem`, `*.key`, credential/token files).
+3. **UKSBS never goes through Backchannel** (Josh, 2026-11-02), whoever asks, owner and trusted
+   people included. `core/src/restricted.ts` is the one list (`uksbs`, `api-super-connect`,
+   `DIGI-nnn`, `Connect 2.0`, plus `BACKCHANNEL_RESTRICTED_TERMS`). Outgoing: every post, title and
+   file is refused if it matches, and any path containing `uksbs` is denied. Incoming: the hub drops
+   matching messages (and replies to them) before a chat is woken, classified or briefed
+   (`hub/src/restrict.ts`). In the woken chat: the hub never passes it the Atlassian or any UKSBS
+   MCP server (`hub/src/mcp-filter.ts`; omp's ACP mode loads MCP only from what the device passes),
+   every brief opens with `WAKE_MARKER`, and atlas-fidelity's `backchannel-guard.ts` then blocks any
+   tool call that touches UKSBS in that chat.
 
 ## Starboard
 

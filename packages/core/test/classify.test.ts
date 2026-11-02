@@ -12,3 +12,11 @@ test('no owner configured means nobody is the owner', () => {
   expect(classifyAuthor({ id: '1' }, undefined)).toBe('human');
   expect(classifyAuthor({ id: '' }, '')).toBe('human');
 });
+
+test('a trusted person reads as trusted, by id only, and never a bot', () => {
+  expect(classifyAuthor({ id: '9' }, '1', undefined, ['9'])).toBe('trusted');
+  expect(classifyAuthor({ id: '9', bot: true }, '1', undefined, ['9'])).toBe('agent');
+  expect(classifyAuthor({ id: '8' }, '1', undefined, ['9'])).toBe('human');
+  // The owner stays the owner even when also listed.
+  expect(classifyAuthor({ id: '1' }, '1', undefined, ['1'])).toBe('owner');
+});

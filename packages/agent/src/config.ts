@@ -11,6 +11,11 @@ export interface AgentConfig {
   agentName?: string;
   /** Push mode: `all` (default) also hears ordinary human conversation, `mentions` only direct triggers. */
   listen?: ListenMode;
+  /**
+   * Discord user ids of people the owner gave their own authority (`from_kind` "trusted").
+   * People only: a bot's id here is ignored. Josh's agent lists Stephen.
+   */
+  trustedIds?: string[];
 }
 
 /** Required fields. `listen` is optional and defaults to `all`. */
@@ -55,7 +60,20 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (typeof listen === 'string' && listen.trim()) {
     config.listen = parseListenMode(listen, env.BACKCHANNEL_LISTEN ? 'BACKCHANNEL_LISTEN' : `"listen" in ${path}`);
   }
+  const trusted = env.BACKCHANNEL_TRUSTED_IDS ?? fromFile.trustedIds;
+  const trustedIds = parseTrustedIds(trusted, env.BACKCHANNEL_TRUSTED_IDS ? 'BACKCHANNEL_TRUSTED_IDS' : `"trustedIds" in ${path}`);
+  if (trustedIds.length) config.trustedIds = trustedIds;
   return config;
+}
+
+/** A comma separated string or an array of Discord user ids. Anything that is not an id is an error, never skipped. */
+export function parseTrustedIds(raw: unknown, source: string): string[] {
+  if (raw === undefined || raw === null || raw === '') return [];
+  const items = typeof raw === 'string' ? raw.split(',') : Array.isArray(raw) ? raw : null;
+  if (!items) throw new Error(`${source} must be a list of Discord user ids`);
+  const ids = items.map((item) => (typeof item === 'string' ? item.trim() : '')).filter((item) => item !== '');
+  for (const id of ids) if (!/^\d{17,20}$/.test(id)) throw new Error(`${source} has "${id}", which is not a Discord user id`);
+  return [...new Set(ids)];
 }
 
 export function missingFields(config: AgentConfig): string[] {
@@ -73,5 +91,5 @@ export function requireConfig(config: AgentConfig, env: Record<string, string | 
         'Run the Backchannel setup (`bun packages/agent/src/setup.ts`, or `/backchannel:configure` in Claude Code).',
     );
   }
-  return { ...config, listen: config.listen ?? DEFAULT_LISTEN } as CompleteConfig;
+  return { ...config, listen: config.listen ?? DEFAULT_LISTEN, trustedIds: config.trustedIds ?? [] } as CompleteConfig;
 }

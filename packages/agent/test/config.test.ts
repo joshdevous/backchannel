@@ -2,7 +2,7 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, missingFields, requireConfig } from '../src/config.ts';
+import { loadConfig, missingFields, parseTrustedIds, requireConfig } from '../src/config.ts';
 
 const dir = mkdtempSync(join(tmpdir(), 'backchannel-config-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -26,4 +26,12 @@ test('listen comes from BACKCHANNEL_LISTEN or the file, defaults to all, rejects
   expect(loadConfig({ BACKCHANNEL_CONFIG: path, BACKCHANNEL_LISTEN: 'all' }).listen).toBe('all');
   expect(requireConfig(loadConfig({ BACKCHANNEL_CONFIG: join(dir, 'nope.json'), BACKCHANNEL_TOKEN: 't', BACKCHANNEL_GUILD_ID: '1', BACKCHANNEL_OWNER_ID: '2', BACKCHANNEL_AGENT_NAME: 'a' })).listen).toBe('all');
   expect(() => loadConfig({ BACKCHANNEL_CONFIG: path, BACKCHANNEL_LISTEN: 'loud' })).toThrow('BACKCHANNEL_LISTEN must be one of all, mentions');
+});
+
+test('trusted ids parse from a list or a comma string and refuse anything that is not an id', () => {
+  expect(parseTrustedIds('676926873669992459, 676926873669992459,259780560707256321', 'x')).toEqual(['676926873669992459', '259780560707256321']);
+  expect(parseTrustedIds(['676926873669992459'], 'x')).toEqual(['676926873669992459']);
+  expect(parseTrustedIds(undefined, 'x')).toEqual([]);
+  expect(() => parseTrustedIds('stephen', 'x')).toThrow(/not a Discord user id/);
+  expect(() => parseTrustedIds({}, 'x')).toThrow(/list of Discord user ids/);
 });

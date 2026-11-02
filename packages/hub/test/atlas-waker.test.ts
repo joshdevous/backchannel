@@ -112,6 +112,7 @@ function setup() {
     cwd: '/root/chats',
     dirExists: (path) => path === '/root/projects/atlas',
     ownerId: 'owner',
+    trustedIds: [],
     guildId: 'g',
     presence: { startTyping: (channelId, probe) => void typing.push({ channelId, probe }) },
     now: () => clock,
@@ -232,7 +233,7 @@ test('spawns a previous process left pending are failed on start, but still coun
   store.beginSpawn('old', 'c1', 'p-bc', 1_000_000_000);
   const chats = new FakeChats();
   const projects = new FakeProjects();
-  const waker = new AtlasWaker({ store, chats, projects, cwd: '/x', ownerId: 'o', guildId: 'g', now: () => 1_000_000_000 + 1000 });
+  const waker = new AtlasWaker({ store, chats, projects, cwd: '/x', ownerId: 'o', trustedIds: [], guildId: 'g', now: () => 1_000_000_000 + 1000 });
   expect(store.hasPendingSpawn('c1', undefined, 0)).toBe(false);
   await waker.wake(wakeEvent('c1'));
   expect(chats.spawns).toHaveLength(0);
