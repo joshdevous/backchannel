@@ -165,7 +165,7 @@ function dateToSnowflake(date) {
 var LISTEN_MODES = ["all", "mentions"];
 var DEFAULT_LISTEN = "all";
 function isDirect(reason) {
-  return reason !== "ambient";
+  return reason !== "ambient" && reason !== "star";
 }
 function parseListenMode(value, source) {
   const trimmed = value?.trim().toLowerCase();

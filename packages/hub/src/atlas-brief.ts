@@ -1,4 +1,4 @@
-import { AMBIENT_NOTE, isDirect, replyLine } from '@backchannel/core';
+import { AMBIENT_NOTE, STAR_EMOJI, STAR_NOTE, isDirect, replyLine } from '@backchannel/core';
 import type { ChannelMessage, ReplyContext, WakeEvent, WakeMessage, WakeReason } from './waker.ts';
 
 /** What the brief needs besides the event. */
@@ -44,6 +44,7 @@ const REASONS: Record<WakeReason, string> = {
   claimed_post: 'posted in a post you have claimed',
   started_post: 'posted in a post you started',
   ambient: 'posted',
+  star: 'starred a message',
 };
 
 export function channelUrl(guildId: string, channelId: string): string {
@@ -112,7 +113,10 @@ export function quoteMessages(messages: readonly WakeMessage[], ownerId: string,
       .map((line) => `> ${line}`)
       .join('\n');
     const reply = message.replyTo ? `\n${replyToLine(message.replyTo, ownerId, trustedIds)}` : '';
-    return `From ${speaker(message, ownerId, trustedIds)} (message ${message.messageId}, ${message.jumpUrl}):${reply}\n${body}`;
+    const head = message.star
+      ? `Starred message from ${speaker(message, ownerId, trustedIds)} (message ${message.messageId}, ${message.jumpUrl}), starred ${STAR_EMOJI} by ${quotedName(message.star.byName)} (${message.star.count} ${message.star.count === 1 ? 'star' : 'stars'} so far)`
+      : `From ${speaker(message, ownerId, trustedIds)} (message ${message.messageId}, ${message.jumpUrl})`;
+    return `${head}:${reply}\n${body}`;
   });
   if (omitted > 0) blocks.unshift(`(${omitted} earlier message${omitted === 1 ? '' : 's'} not shown – use \`read\`.)`);
   return blocks.join('\n\n');
@@ -154,7 +158,14 @@ function trigger(event: WakeEvent): WakeMessage {
   return [...event.messages].reverse().find((m) => m.reason === event.reason) ?? event;
 }
 
+/** Who did what: the author's words for a message, the starrer's for a star (names quoted, they are peers' text). */
+function wokenBy(event: WakeEvent, who: WakeMessage): string {
+  if (event.reason === 'star' && who.star) return `${quotedName(who.star.byName)} starred a message by ${quotedName(who.authorName)}`;
+  return `${who.authorName} ${REASONS[event.reason]}`;
+}
+
 function howToAnswer(event: WakeEvent): string {
+  if (event.reason === 'star') return STAR_NOTE;
   if (!isDirect(event.reason)) return AMBIENT_NOTE;
   return `Answer in the same place with \`post\` (channel "${event.channelId}"; \`reply_to\` a message id to reply to it). Keep it short and useful.`;
 }
@@ -170,7 +181,7 @@ export function firstBrief(
   const direct = isDirect(event.reason);
   return [
     WAKE_MARKER,
-    `You were woken by Backchannel, the Discord server where friends' agents, their people and you talk to each other. On Discord you are Josh's agent. ${who.authorName} ${REASONS[event.reason]} in ${where(event, ctx)}.${direct ? '' : ' You are listening to the conversation there; nobody addressed you.'}`,
+    `You were woken by Backchannel, the Discord server where friends' agents, their people and you talk to each other. On Discord you are Josh's agent. ${wokenBy(event, who)} in ${where(event, ctx)}.${direct ? '' : ' You are listening to the conversation there; nobody addressed you.'}`,
     `Discord channel id: ${event.channelId} (the \`channel\` argument of the backchannel tools). ${scopeLine(event, scope)}`,
     ...(earlier.length ? [`Earlier in the channel, for context (oldest first, shortened):\n${earlierLines(earlier, ctx.ownerId, ctx.trustedIds)}`] : []),
     `New messages, oldest first:\n\n${quoteMessages(event.messages, ctx.ownerId, ctx.trustedIds)}`,

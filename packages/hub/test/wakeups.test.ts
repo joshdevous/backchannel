@@ -6,13 +6,15 @@ import {
   isMarker,
   mergeWakeMessages,
   needsClaimantLookup,
+  starWakeReason,
   wakeReason,
   WAKE_MAX_MS,
   WAKE_QUIET_MS,
   type Scheduler,
+  type StarInput,
   type WakeInput,
 } from '../src/wakeups.ts';
-import type { ListenMode } from '@backchannel/core';
+import type { AmbientInput, ListenMode } from '@backchannel/core';
 
 const T = 'target';
 const HUB = 'hub';
@@ -196,4 +198,26 @@ test('isMarker matches claim and release first lines only', () => {
   expect(isMarker('🔒 Claimed by atlas\nplan')).toBe(true);
   expect(isMarker('🔓 Released by atlas – now Done')).toBe(true);
   expect(isMarker('talking about 🔒 Claimed by someone')).toBe(false);
+});
+
+const star: StarInput = { starrerId: 'robo', authorId: 'sam', starredByTarget: false, ambient: { fromBot: true, type: 0, where: 'text', channelName: 'general' } satisfies AmbientInput };
+const starReason = (input: Partial<StarInput> = {}, listen: ListenMode = 'all') => starWakeReason({ ...star, ...input }, T, HUB, listen);
+
+test('a new star wakes the target as star, even on a bot message, but only in listen mode all', () => {
+  expect(starReason()).toBe('star');
+  expect(starReason({ ambient: { ...star.ambient, where: 'forum_post' } })).toBe('star');
+  expect(starReason({}, 'mentions')).toBeNull();
+});
+
+test('a star is ignored when the target or the hub gave it, the hub wrote the message, or the target already starred it', () => {
+  expect(starReason({ starrerId: T })).toBeNull();
+  expect(starReason({ starrerId: HUB })).toBeNull();
+  expect(starReason({ authorId: HUB })).toBeNull();
+  expect(starReason({ starredByTarget: true })).toBeNull();
+});
+
+test('stars on notices, in #starboard or in other channel kinds do not wake', () => {
+  expect(starReason({ ambient: { ...star.ambient, type: 7 } })).toBeNull();
+  expect(starReason({ ambient: { ...star.ambient, channelName: 'starboard' } })).toBeNull();
+  expect(starReason({ ambient: { ...star.ambient, where: 'other' } })).toBeNull();
 });

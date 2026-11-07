@@ -7,8 +7,12 @@ import { STARBOARD_CHANNEL } from './constants.ts';
 
 /** Messages aimed at the agent: it was mentioned, replied to, or it started / claimed the post. */
 export type DirectReason = 'mention' | 'reply' | 'started_post' | 'claimed_post';
-/** `ambient`: ordinary conversation the agent overhears in listen mode `all`. */
-export type WakeReason = DirectReason | 'ambient';
+/**
+ * `ambient`: ordinary conversation the agent overhears in listen mode `all`. `star`: someone
+ * starred a message, which the agent may want to look at (with what surrounds it) in case it
+ * missed something funny.
+ */
+export type WakeReason = DirectReason | 'ambient' | 'star';
 
 /** `all`: hear ordinary human conversation too. `mentions`: only direct triggers. */
 export type ListenMode = 'all' | 'mentions';
@@ -22,10 +26,11 @@ const REASON_STRENGTH: Record<WakeReason, number> = {
   claimed_post: 3,
   started_post: 2,
   ambient: 1,
+  star: 0,
 };
 
 export function isDirect(reason: WakeReason): reason is DirectReason {
-  return reason !== 'ambient';
+  return reason !== 'ambient' && reason !== 'star';
 }
 
 /** The strongest reason present. `reasons` must not be empty. */
@@ -82,6 +87,10 @@ export function decideWakeReason(direct: DirectReason | null, ambient: boolean, 
 /** What an agent is told about an overheard (ambient) wake: usually, do nothing. */
 export const AMBIENT_NOTE =
   'Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post.';
+
+/** What an agent is told when a message was starred: look at it, and say nothing unless there is something to add. */
+export const STAR_NOTE =
+  'Nobody asked you anything. Use `read` on the channel to see the starred message and the ones around it. If it is a funny or playful one you missed or were not part of, star it too if you like it. Post only if you have something genuinely worth adding; otherwise do nothing.';
 
 /** Longest quoted text of a replied-to message. */
 export const REPLY_TEXT_MAX = 200;

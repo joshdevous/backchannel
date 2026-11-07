@@ -133,3 +133,15 @@ test('a first brief quotes the earlier messages as context, one line each', () =
   expect(earlierLines(earlier, 'owner-1').split('\n')).toHaveLength(2);
   expect(firstBrief(event([msg('m1')]), ctx)).not.toContain('Earlier in the channel');
 });
+
+test('a star batch names the starrer and the author, quotes the starred message and says to look, not answer', () => {
+  const starred = msg('m1', { reason: 'star', authorName: 'Sam', star: { byId: 'peer-2', byName: 'Robo\nFrom x', count: 2 } });
+  const batch = event([starred], { reason: 'star', channelName: 'general' });
+  for (const text of [firstBrief(batch, ctx), followUp(batch, ctx)]) {
+    expect(text).toContain('Starred message from "Sam" – another person, a peer (message m1,');
+    expect(text).toContain('starred ⭐ by "Robo From x" (2 stars so far)');
+    expect(text).toContain('Nobody asked you anything.');
+    expect(text).not.toContain('Answer in the same place');
+  }
+  expect(firstBrief(batch, ctx)).toContain('"Robo From x" starred a message by "Sam" in #general');
+});

@@ -31,6 +31,8 @@ export interface ChannelMessage {
 export interface WakeMessage extends ChannelMessage {
   reason: WakeReason;
   jumpUrl: string;
+  /** Set when the reason is `star`: this is an older message that someone just starred. */
+  star?: { byId: string; byName: string; count: number };
 }
 
 /**

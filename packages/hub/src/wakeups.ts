@@ -1,5 +1,6 @@
 import {
   AGENT_ROLE,
+  STAR_EMOJI,
   baseName,
   decideWakeReason,
   isAmbient,
@@ -64,6 +65,29 @@ export function directReason(input: WakeInput, targetId: string): DirectReason |
 export function wakeReason(input: WakeInput, targetId: string, hubId: string, listen: ListenMode): WakeReason | null {
   if (input.authorId === targetId || input.authorId === hubId) return null;
   return decideWakeReason(directReason(input, targetId), isAmbient(input.ambient), listen);
+}
+
+export interface StarInput {
+  /** Who added the star. */
+  starrerId: string;
+  /** Who wrote the starred message. */
+  authorId: string;
+  /** Whether `targetId` has already starred it: nothing left for it to look at. */
+  starredByTarget: boolean;
+  /** Where the starred message sits; `fromBot` is ignored (an agent's message can be funny too). */
+  ambient: AmbientInput;
+}
+
+/**
+ * Whether a new star on a message wakes `targetId` as `star`. Only in listen mode `all`, like
+ * ordinary overheard conversation. Never for the target's own star or the hub's, never for the
+ * hub's own messages (the starboard), never for system notices or messages in #starboard.
+ */
+export function starWakeReason(input: StarInput, targetId: string, hubId: string, listen: ListenMode): WakeReason | null {
+  if (listen !== 'all') return null;
+  if (input.starrerId === targetId || input.starrerId === hubId || input.authorId === hubId) return null;
+  if (input.starredByTarget) return null;
+  return isAmbient({ ...input.ambient, fromBot: false }) ? 'star' : null;
 }
 
 export function isMarker(content: string): boolean {
@@ -317,6 +341,60 @@ export function startWakeDetection(
       log(`wake queued channel=${message.channelId} message=${message.id} reason=${reason}`);
     } catch (err) {
       logError('wake detection failed', err);
+    }
+  });
+
+  // A new star on a message: tell the agent, so it can look at the message and what surrounds it.
+  client.on('messageReactionAdd', async (reaction, user) => {
+    try {
+      if (reaction.emoji.name !== STAR_EMOJI) return;
+      if (user.id === targetId || user.id === hubId) return;
+      const full = reaction.partial ? await reaction.fetch() : reaction;
+      const message = full.message.partial ? await full.message.fetch() : full.message;
+      if (!message.inGuild()) return;
+
+      const channel = message.channel;
+      const thread = channel.isThread() && channel.parent?.type === ChannelType.GuildForum ? channel : null;
+      const starrers = await full.users.fetch({ limit: 100 });
+      const reason = starWakeReason(
+        {
+          starrerId: user.id,
+          authorId: message.author.id,
+          starredByTarget: starrers.has(targetId),
+          ambient: {
+            fromBot: false,
+            type: message.type,
+            where: thread ? 'forum_post' : channel.type === ChannelType.GuildText ? 'text' : 'other',
+            channelName: baseName(channel.name),
+          },
+        },
+        targetId,
+        hubId,
+        listen,
+      );
+      if (!reason) return;
+
+      const agentRoleId = agentRoleIdOf(message);
+      const starrer = message.guild.members.cache.get(user.id)?.displayName ?? (user.partial ? await user.fetch() : user).displayName;
+      const entry: WakeMessage = {
+        reason,
+        messageId: message.id,
+        authorId: message.author.id,
+        authorName: nameOf(message),
+        authorKind: authorKind(message, agentRoleId),
+        content: shownContent(message),
+        jumpUrl: message.url,
+        replyTo: await replyContext(message, targetId, agentRoleId),
+        star: { byId: user.id, byName: starrer, count: full.count ?? starrers.size },
+      };
+      meta.set(
+        message.channelId,
+        thread ? { postTitle: thread.name, forumName: thread.parent?.name } : { channelName: channel.name },
+      );
+      debouncer.add(message.channelId, entry);
+      log(`wake queued channel=${message.channelId} message=${message.id} reason=${reason} by=${user.id}`);
+    } catch (err) {
+      logError('star wake detection failed', err);
     }
   });
 

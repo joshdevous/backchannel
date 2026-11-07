@@ -69,3 +69,9 @@ test('system messages get a readable line; spoken ones none', () => {
   expect(systemText(0, 'Josh', 'hi')).toBeUndefined();
   expect(systemText(19, 'Josh', 'hi')).toBeUndefined();
 });
+
+test('star is the weakest reason and not a direct one', () => {
+  expect(strongestReason(['star', 'ambient'])).toBe('ambient');
+  expect(strongestReason(['star', 'star'])).toBe('star');
+  expect(isDirect('star')).toBe(false);
+});
