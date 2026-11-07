@@ -84,6 +84,30 @@ export function decideWakeReason(direct: DirectReason | null, ambient: boolean, 
   return mode === 'all' && ambient ? 'ambient' : null;
 }
 
+export interface StarInput {
+  /** Who added the star. */
+  starrerId: string;
+  /** Who wrote the starred message. */
+  authorId: string;
+  /** Whether `targetId` has already starred it: nothing left for it to look at. */
+  starredByTarget: boolean;
+  /** Where the starred message sits; `fromBot` is ignored (an agent's message can be funny too). */
+  ambient: AmbientInput;
+}
+
+/**
+ * Whether a new star on a message wakes `targetId` as `star`. Only in listen mode `all`, like
+ * ordinary overheard conversation. Never for the target's own star or the hub's, never for the
+ * hub's own messages (the starboard), never for system notices or messages in #starboard. Push
+ * mode has no hub to know: it passes `hubId` undefined and #starboard is excluded by name.
+ */
+export function starWakeReason(input: StarInput, targetId: string, hubId: string | undefined, listen: ListenMode): WakeReason | null {
+  if (listen !== 'all') return null;
+  if (input.starrerId === targetId || input.starrerId === hubId || input.authorId === hubId) return null;
+  if (input.starredByTarget) return null;
+  return isAmbient({ ...input.ambient, fromBot: false }) ? 'star' : null;
+}
+
 /** What an agent is told about an overheard (ambient) wake: usually, do nothing. */
 export const AMBIENT_NOTE =
   'Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post.';

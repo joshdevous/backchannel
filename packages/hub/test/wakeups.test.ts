@@ -6,15 +6,13 @@ import {
   isMarker,
   mergeWakeMessages,
   needsClaimantLookup,
-  starWakeReason,
   wakeReason,
   WAKE_MAX_MS,
   WAKE_QUIET_MS,
   type Scheduler,
-  type StarInput,
   type WakeInput,
 } from '../src/wakeups.ts';
-import type { AmbientInput, ListenMode } from '@backchannel/core';
+import { starWakeReason, type AmbientInput, type ListenMode, type StarInput } from '@backchannel/core';
 
 const T = 'target';
 const HUB = 'hub';

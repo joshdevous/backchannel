@@ -187,7 +187,17 @@ function decideWakeReason(direct, ambient, mode) {
     return direct;
   return mode === "all" && ambient ? "ambient" : null;
 }
+function starWakeReason(input, targetId, hubId, listen) {
+  if (listen !== "all")
+    return null;
+  if (input.starrerId === targetId || input.starrerId === hubId || input.authorId === hubId)
+    return null;
+  if (input.starredByTarget)
+    return null;
+  return isAmbient({ ...input.ambient, fromBot: false }) ? "star" : null;
+}
 var AMBIENT_NOTE = "Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post.";
+var STAR_NOTE = "Nobody asked you anything. Use `read` on the channel to see the starred message and the ones around it. If it is a funny or playful one you missed or were not part of, star it too if you like it. Post only if you have something genuinely worth adding; otherwise do nothing.";
 var REPLY_TEXT_MAX = 200;
 function shortText(text, max = REPLY_TEXT_MAX) {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -554,7 +564,7 @@ function loadUpload(path, protectedPaths = [], deniedPrefixes = extraDeniedPrefi
   return { name: basename(given), data };
 }
 
-import { ChannelType as ChannelType2, Client, Events, GatewayIntentBits } from "discord.js";
+import { ChannelType as ChannelType2, Client, Events, GatewayIntentBits, Partials } from "discord.js";
 
 import { chmodSync, existsSync as existsSync2, mkdirSync, readFileSync as readFileSync3, renameSync, writeFileSync } from "fs";
 import { dirname } from "path";
@@ -608,15 +618,19 @@ function pushReason(input, meId, claimedPosts, listen) {
 }
 
 var PUSH_CONTENT_MAX = 4000;
-function pushContent(text, reason, reply, attachments = []) {
+function pushContent(text, reason, reply, attachments = [], star) {
   let body = text.length > PUSH_CONTENT_MAX ? `${text.slice(0, PUSH_CONTENT_MAX)}
 \u2026 (cut; use the read tool for the rest)` : text;
   if (attachments.length)
     body += `
 [attachments: ${attachments.join(", ")} \u2013 use the read tool for links]`;
   const lines = [];
-  if (!isDirect(reason))
+  if (reason === "star")
+    lines.push(`[${STAR_NOTE}]`);
+  else if (!isDirect(reason))
     lines.push(`[${AMBIENT_NOTE}]`);
+  if (star)
+    lines.push(`${STAR_EMOJI} starred by ${JSON.stringify(shortText(star.by, 64))} (${star.count} ${star.count === 1 ? "star" : "stars"} so far):`);
   if (reply)
     lines.push(replyLine(reply));
   lines.push(body);
@@ -648,7 +662,13 @@ async function replyOf(message, meId, ownerId, trustedIds) {
 }
 async function startPush(server, config, typing) {
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMessageReactions
+    ],
+    partials: [Partials.Message, Partials.Reaction, Partials.User]
   });
   client.on(Events.MessageCreate, async (message) => {
     try {
@@ -702,6 +722,60 @@ async function startPush(server, config, typing) {
       });
     } catch (error) {
       console.error(`[backchannel] push: failed to forward message: ${error.message}`);
+    }
+  });
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+    try {
+      if (reaction.emoji.name !== STAR_EMOJI || !client.user || user.id === client.user.id)
+        return;
+      const full = reaction.partial ? await reaction.fetch() : reaction;
+      const message = full.message.partial ? await full.message.fetch() : full.message;
+      if (!message.inGuild() || message.guildId !== config.guildId)
+        return;
+      const me = client.user.id;
+      const channel = message.channel;
+      const thread = channel.isThread() ? channel : null;
+      const forumPost = thread?.parent?.type === ChannelType2.GuildForum;
+      const starrers = await full.users.fetch({ limit: 100 });
+      const reason = starWakeReason({
+        starrerId: user.id,
+        authorId: message.author.id,
+        starredByTarget: starrers.has(me),
+        ambient: {
+          fromBot: false,
+          type: message.type,
+          where: forumPost ? "forum_post" : channel.type === ChannelType2.GuildText ? "text" : "other",
+          channelName: baseName(channel.name)
+        }
+      }, me, undefined, config.listen);
+      if (!reason)
+        return;
+      const reply = await replyOf(message, me, config.ownerId, config.trustedIds);
+      const text = systemText(message.type, nameOf(message), message.content) ?? renderMentions(message, message.content);
+      const by = message.guild.members.cache.get(user.id)?.displayName ?? (user.partial ? await user.fetch() : user).displayName;
+      const content = pushContent(text, reason, reply, [...message.attachments.values()].map((a) => a.name), {
+        by,
+        count: full.count ?? starrers.size
+      });
+      const meta = {
+        channel_id: message.channelId,
+        message_id: message.id,
+        from: nameOf(message),
+        from_kind: classifyAuthor({ id: message.author.id, bot: message.author.bot }, config.ownerId, undefined, config.trustedIds),
+        reason,
+        starred_by: by
+      };
+      if (thread)
+        meta.post_title = thread.name;
+      if (reply) {
+        meta.reply_to_message_id = reply.id;
+        meta.reply_to_author = reply.author;
+        if (reply.from_kind)
+          meta.reply_to_from_kind = reply.from_kind;
+      }
+      await server.notification({ method: "notifications/claude/channel", params: { content, meta } });
+    } catch (error) {
+      console.error(`[backchannel] push: failed to forward star: ${error.message}`);
     }
   });
   client.once(Events.ClientReady, (ready) => {
@@ -1555,7 +1629,7 @@ STARS: the star tool is for fun as much as for showing off. When something in th
 
 Be a good neighbour: keep messages short, reply in the post the work belongs to, and stop when a conversation is only bots talking (post refuses after 10 bot messages in a row).${push ? `
 
-Messages arrive as <channel source="backchannel" channel_id="..." message_id="..." from="..." from_kind="..." reason="..."> events (post_title is set for forum posts; reply_to_message_id / reply_to_author / reply_to_from_kind for replies). reason is mention, reply, started_post or claimed_post when the message is aimed at you: answer it in the same place with post (channel = the channel_id, reply_to = the message_id).${listen === "all" ? ' You also hear ordinary conversation from people in the server: those events have reason="ambient". Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post. Other bots never wake you unless they mention or reply to you.' : ""} The same authority rule applies to every event. Use read for more context.` : ""}`;
+Messages arrive as <channel source="backchannel" channel_id="..." message_id="..." from="..." from_kind="..." reason="..."> events (post_title is set for forum posts; reply_to_message_id / reply_to_author / reply_to_from_kind for replies). reason is mention, reply, started_post or claimed_post when the message is aimed at you: answer it in the same place with post (channel = the channel_id, reply_to = the message_id).${listen === "all" ? ' You also hear ordinary conversation from people in the server: those events have reason="ambient". Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post. Other bots never wake you unless they mention or reply to you. When someone stars a message you hear about it too: reason="star", with starred_by in the meta and the starred message as the text. Nobody asked you anything: read the channel to see it and what surrounds it, star it yourself if it is a funny or playful one you missed, and otherwise do nothing.' : ""} The same authority rule applies to every event. Use read for more context.` : ""}`;
 var server = new Server({ name: "backchannel", version: VERSION }, {
   capabilities: {
     tools: {},

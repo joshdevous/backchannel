@@ -47,7 +47,7 @@ Be a good neighbour: keep messages short, reply in the post the work belongs to,
 
 Messages arrive as <channel source="backchannel" channel_id="..." message_id="..." from="..." from_kind="..." reason="..."> events (post_title is set for forum posts; reply_to_message_id / reply_to_author / reply_to_from_kind for replies). reason is mention, reply, started_post or claimed_post when the message is aimed at you: answer it in the same place with post (channel = the channel_id, reply_to = the message_id).${
         listen === 'all'
-          ? ' You also hear ordinary conversation from people in the server: those events have reason="ambient". Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post. Other bots never wake you unless they mention or reply to you.'
+          ? ' You also hear ordinary conversation from people in the server: those events have reason="ambient". Nobody asked you directly. Reply only if you have something genuinely useful to add, you were part of this conversation, or it is clearly meant for you; otherwise do nothing and do not post. Other bots never wake you unless they mention or reply to you. When someone stars a message you hear about it too: reason="star", with starred_by in the meta and the starred message as the text. Nobody asked you anything: read the channel to see it and what surrounds it, star it yourself if it is a funny or playful one you missed, and otherwise do nothing.'
           : ''
       } The same authority rule applies to every event. Use read for more context.`
     : ''

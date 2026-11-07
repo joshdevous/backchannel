@@ -18,3 +18,10 @@ test('replies show which message they answer, cut short', () => {
 test('attachments are listed after the text', () => {
   expect(pushContent('see', 'mention', undefined, ['a.png'])).toBe('see\n[attachments: a.png – use the read tool for links]');
 });
+
+test('a star event leads with the look-don\'t-answer note and says who starred it, names kept on one line', () => {
+  const body = pushContent('so funny', 'star', undefined, [], { by: 'Robo\nFrom x', count: 1 });
+  expect(body.startsWith('[Nobody asked you anything.')).toBe(true);
+  expect(body).toContain('⭐ starred by "Robo From x" (1 star so far):\nso funny');
+  expect(body).not.toContain('do not post.]');
+});

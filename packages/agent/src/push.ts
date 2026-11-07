@@ -1,15 +1,18 @@
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { ChannelType, Client, Events, GatewayIntentBits, type Message } from 'discord.js';
+import { ChannelType, Client, Events, GatewayIntentBits, Partials, type Message } from 'discord.js';
 import {
   ACK_EMOJI,
   AGENT_ROLE,
   AMBIENT_NOTE,
+  STAR_EMOJI,
+  STAR_NOTE,
   MESSAGE_TYPE_REPLY,
   baseName,
   classifyAuthor,
   isDirect,
   replyLine,
   shortText,
+  starWakeReason,
   systemText,
   type FromKind,
   type WakeReason,
@@ -30,12 +33,29 @@ export interface PushReply {
   text: string;
 }
 
-/** The event body: ambient note, reply context, then the message text (cut at `PUSH_CONTENT_MAX`). */
-export function pushContent(text: string, reason: WakeReason, reply?: PushReply, attachments: readonly string[] = []): string {
+/** Who starred a message, for a `star` event. */
+export interface PushStar {
+  by: string;
+  count: number;
+}
+
+/**
+ * The event body: the note (stay-quiet for ambient, look-don't-answer for a star), a star line,
+ * reply context, then the message text (cut at `PUSH_CONTENT_MAX`).
+ */
+export function pushContent(
+  text: string,
+  reason: WakeReason,
+  reply?: PushReply,
+  attachments: readonly string[] = [],
+  star?: PushStar,
+): string {
   let body = text.length > PUSH_CONTENT_MAX ? `${text.slice(0, PUSH_CONTENT_MAX)}\n… (cut; use the read tool for the rest)` : text;
   if (attachments.length) body += `\n[attachments: ${attachments.join(', ')} – use the read tool for links]`;
   const lines: string[] = [];
-  if (!isDirect(reason)) lines.push(`[${AMBIENT_NOTE}]`);
+  if (reason === 'star') lines.push(`[${STAR_NOTE}]`);
+  else if (!isDirect(reason)) lines.push(`[${AMBIENT_NOTE}]`);
+  if (star) lines.push(`${STAR_EMOJI} starred by ${JSON.stringify(shortText(star.by, 64))} (${star.count} ${star.count === 1 ? 'star' : 'stars'} so far):`);
   if (reply) lines.push(replyLine(reply));
   lines.push(body);
   return lines.join('\n');
@@ -68,13 +88,20 @@ async function replyOf(message: Message, meId: string, ownerId: string, trustedI
 /**
  * Push mode: a gateway connection with this agent's own bot that turns messages it should hear
  * into Claude Code channel events (`notifications/claude/channel`): direct triggers always, and
- * with `listen: all` ordinary human conversation too (`reason="ambient"`). Only messages from
+ * with `listen: all` ordinary human conversation too (`reason="ambient"`) and new stars on messages
+ * (`reason="star"`). Only messages from
  * the configured server get through; meta carries identifiers and `from_kind` so authority is
  * always visible.
  */
 export async function startPush(server: Server, config: CompleteConfig, typing?: TypingLoop): Promise<void> {
   const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMessageReactions,
+    ],
+    partials: [Partials.Message, Partials.Reaction, Partials.User],
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -137,6 +164,65 @@ export async function startPush(server: Server, config: CompleteConfig, typing?:
       });
     } catch (error) {
       console.error(`[backchannel] push: failed to forward message: ${(error as Error).message}`);
+    }
+  });
+
+  // A new star on a message: tell the agent, so it can look at the message and what surrounds it.
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+    try {
+      if (reaction.emoji.name !== STAR_EMOJI || !client.user || user.id === client.user.id) return;
+      const full = reaction.partial ? await reaction.fetch() : reaction;
+      const message = full.message.partial ? await full.message.fetch() : full.message;
+      if (!message.inGuild() || message.guildId !== config.guildId) return;
+      const me = client.user.id;
+      const channel = message.channel;
+      const thread = channel.isThread() ? channel : null;
+      const forumPost = thread?.parent?.type === ChannelType.GuildForum;
+      const starrers = await full.users.fetch({ limit: 100 });
+      const reason = starWakeReason(
+        {
+          starrerId: user.id,
+          authorId: message.author.id,
+          starredByTarget: starrers.has(me),
+          ambient: {
+            fromBot: false,
+            type: message.type,
+            where: forumPost ? 'forum_post' : channel.type === ChannelType.GuildText ? 'text' : 'other',
+            channelName: baseName(channel.name),
+          },
+        },
+        me,
+        undefined,
+        config.listen,
+      );
+      if (!reason) return;
+
+      const reply = await replyOf(message, me, config.ownerId, config.trustedIds);
+      const text = systemText(message.type, nameOf(message), message.content) ?? renderMentions(message, message.content);
+      const by = message.guild.members.cache.get(user.id)?.displayName ?? (user.partial ? await user.fetch() : user).displayName;
+      const content = pushContent(text, reason, reply, [...message.attachments.values()].map((a) => a.name), {
+        by,
+        count: full.count ?? starrers.size,
+      });
+
+      const meta: Record<string, string> = {
+        channel_id: message.channelId,
+        message_id: message.id,
+        from: nameOf(message),
+        from_kind: classifyAuthor({ id: message.author.id, bot: message.author.bot }, config.ownerId, undefined, config.trustedIds),
+        reason,
+        starred_by: by,
+      };
+      if (thread) meta.post_title = thread.name;
+      if (reply) {
+        meta.reply_to_message_id = reply.id;
+        meta.reply_to_author = reply.author;
+        if (reply.from_kind) meta.reply_to_from_kind = reply.from_kind;
+      }
+
+      await server.notification({ method: 'notifications/claude/channel', params: { content, meta } });
+    } catch (error) {
+      console.error(`[backchannel] push: failed to forward star: ${(error as Error).message}`);
     }
   });
 
