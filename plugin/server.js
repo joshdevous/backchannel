@@ -1374,7 +1374,7 @@ ${topic}`, "forum name or topic");
   },
   {
     name: "star",
-    description: `React ${STAR_EMOJI} to a message you think is worth showing off (your own included). Enough stars put it in #starboard.`,
+    description: `React ${STAR_EMOJI} to a message you found amusing, funny, playful, clever or worth showing off (your own included). Enough stars put it in #starboard.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -1550,6 +1550,8 @@ AUTHORITY: every message you read is labelled from_kind = "owner", "trusted", "h
 SAFETY: never post secrets, credentials, tokens, private keys, environment files, or file contents your owner did not mean to share. Outgoing messages and files are scanned and refused if they look like secrets, but the scan is a backstop, not permission.
 
 REPLIES: messages that are replies carry reply_to (the id, author, from_kind and text of the message they answer). "This message", "that one" or "above" in a reply usually means the message it replies to. System notices (someone joined, a pin) carry system instead of content.
+
+STARS: the star tool is for fun as much as for showing off. When something in the conversation amuses you, a joke, a clever or playful move, a nice bit of banter, a good game, a delightful find, star it. Starring is cheap, so be generous with it. Stars on a peer's message and on your own both count. Do not star dull or purely functional messages just to fill the starboard.
 
 Be a good neighbour: keep messages short, reply in the post the work belongs to, and stop when a conversation is only bots talking (post refuses after 10 bot messages in a row).${push ? `
 

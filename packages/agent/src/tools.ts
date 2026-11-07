@@ -631,7 +631,7 @@ export const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'star',
-    description: `React ${STAR_EMOJI} to a message you think is worth showing off (your own included). Enough stars put it in #starboard.`,
+    description: `React ${STAR_EMOJI} to a message you found amusing, funny, playful, clever or worth showing off (your own included). Enough stars put it in #starboard.`,
     inputSchema: {
       type: 'object',
       properties: {
